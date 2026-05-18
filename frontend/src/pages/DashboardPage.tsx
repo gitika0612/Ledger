@@ -9,7 +9,6 @@ import {
   Plus,
   Upload,
   BarChart3,
-  Bot,
   LogOut,
   Settings,
   ChevronRight,
@@ -43,21 +42,21 @@ const NAV_ITEMS = [
   },
   { icon: FileText, label: "All Invoices", path: "/invoices", active: true },
   { icon: Plus, label: "Create Invoice", path: "/create", active: true },
-  {
-    icon: Upload,
-    label: "Scan Invoice",
-    path: "/scan",
-    active: false,
-    soon: true,
-  },
-  {
-    icon: BarChart3,
-    label: "Insights",
-    path: "/insights",
-    active: false,
-    soon: true,
-  },
-  { icon: Bot, label: "AI Agent", path: "/agent", active: false, soon: true },
+  // {
+  //   icon: Upload,
+  //   label: "Scan Invoice",
+  //   path: "/scan",
+  //   active: false,
+  //   soon: true,
+  // },
+  // {
+  //   icon: BarChart3,
+  //   label: "Insights",
+  //   path: "/insights",
+  //   active: false,
+  //   soon: true,
+  // },
+  // { icon: Bot, label: "AI Agent", path: "/agent", active: false, soon: true },
 ];
 
 const QUICK_ACTIONS = [
@@ -240,14 +239,14 @@ export function DashboardPage() {
                 {!collapsed && (
                   <>
                     <span className="flex-1 text-left">{item.label}</span>
-                    {item.soon && (
+                    {/* {item.soon && (
                       <Badge
                         variant="secondary"
                         className="text-xs px-1.5 py-0 rounded-full font-normal h-4"
                       >
                         Soon
                       </Badge>
-                    )}
+                    )} */}
                   </>
                 )}
               </Button>

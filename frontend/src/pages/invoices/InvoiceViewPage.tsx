@@ -14,7 +14,11 @@ import {
   AlertTriangle,
   FileText,
 } from "lucide-react";
-import { fetchInvoiceById, updateInvoice } from "@/lib/api/invoiceApi";
+import {
+  confirmInvoice,
+  fetchInvoiceById,
+  updateInvoice,
+} from "@/lib/api/invoiceApi";
 import { downloadInvoicePDF } from "@/lib/downloadPDF";
 import { EditInvoiceModal } from "@/components/invoice/modals/EditInvoiceModal";
 import { LineItem } from "@/components/invoice/InvoicePreviewCard";
@@ -22,6 +26,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { SendInvoiceModal } from "@/components/invoice/modals/SendInvoiceModel";
+import { toast } from "sonner";
 
 interface Invoice {
   _id: string;
@@ -102,6 +107,47 @@ function getDaysUntilDue(dueDate: string) {
   return Math.ceil(diff / (1000 * 60 * 60 * 24));
 }
 
+function getInvoicePermissions(
+  status: "draft" | "confirmed" | "sent" | "paid" | "overdue"
+) {
+  switch (status) {
+    case "draft":
+      return {
+        canEdit: true,
+        canSend: false,
+        reason: "Draft must be confirmed before sending",
+      };
+
+    case "confirmed":
+      return {
+        canEdit: true,
+        canSend: true,
+      };
+
+    case "sent":
+      return {
+        canEdit: false,
+        canSend: false,
+        reason: "Invoice already sent",
+      };
+
+    case "paid":
+      return {
+        canEdit: false,
+        canSend: false,
+        reason: "Paid invoices are locked",
+      };
+
+    case "overdue":
+      return {
+        canEdit: false,
+        canSend: false,
+        canRemind: true,
+        reason: "Overdue invoice — send reminder instead",
+      };
+  }
+}
+
 export function InvoiceViewPage() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -110,6 +156,7 @@ export function InvoiceViewPage() {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
   const [showSendModal, setShowSendModal] = useState(false);
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -157,6 +204,30 @@ export function InvoiceViewPage() {
     }
   };
 
+  const handleConfirmInvoice = async () => {
+    if (!invoice) return;
+
+    try {
+      const confirmed = await confirmInvoice(invoice._id);
+
+      setInvoice((prev) =>
+        prev
+          ? {
+              ...prev,
+              status: "confirmed",
+              invoiceNumber: confirmed.invoiceNumber,
+            }
+          : prev
+      );
+
+      toast.success("Invoice confirmed successfully!");
+    } catch (err) {
+      console.error("Failed to confirm invoice:", err);
+
+      toast.error("Failed to confirm invoice");
+    }
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-[#F9FAFB] flex items-center justify-center">
@@ -186,8 +257,7 @@ export function InvoiceViewPage() {
   const daysUntilDue = invoice.dueDate
     ? getDaysUntilDue(invoice.dueDate)
     : null;
-  const isDraft = invoice.status === "draft";
-  const isPaid = invoice.status === "paid";
+  const perms = getInvoicePermissions(invoice.status);
 
   const hasDiscount =
     invoice.discountType &&
@@ -220,26 +290,31 @@ export function InvoiceViewPage() {
           </div>
 
           <div className="flex items-center gap-2">
-            {isDraft && (
-              <Button
-                variant="outline"
-                onClick={() => setShowSendModal(true)}
-                className="gap-2 rounded-xl"
-              >
-                <Send className="w-4 h-4" />
-                Send
-              </Button>
-            )}
-            {!isPaid && (
-              <Button
-                variant="outline"
-                onClick={() => setEditing(true)}
-                className="gap-2 rounded-xl"
-              >
-                <Edit2 className="w-4 h-4" />
-                Edit
-              </Button>
-            )}
+            <Button
+              variant="outline"
+              disabled={!perms.canSend}
+              title={!perms.canSend ? perms.reason : ""}
+              onClick={perms.canSend ? () => setShowSendModal(true) : undefined}
+              className={`gap-2 rounded-xl ${
+                !perms.canSend ? "opacity-50 cursor-not-allowed" : ""
+              }`}
+            >
+              <Send className="w-4 h-4" />
+              Send
+            </Button>
+
+            <Button
+              variant="outline"
+              disabled={!perms.canEdit}
+              title={!perms.canEdit ? perms.reason : ""}
+              onClick={perms.canEdit ? () => setEditing(true) : undefined}
+              className={`gap-2 rounded-xl ${
+                !perms.canEdit ? "opacity-50 cursor-not-allowed" : ""
+              }`}
+            >
+              <Edit2 className="w-4 h-4" />
+              Edit
+            </Button>
             <Button
               onClick={handleDownload}
               className="gap-2 rounded-xl bg-indigo-600 hover:bg-indigo-700"
@@ -558,6 +633,16 @@ export function InvoiceViewPage() {
                 Actions
               </p>
               <div className="space-y-2">
+                {invoice.status === "draft" && (
+                  <Button
+                    variant="outline"
+                    onClick={() => setShowConfirmModal(true)}
+                    className="w-full justify-start gap-3 rounded-xl"
+                  >
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                    Confirm Invoice
+                  </Button>
+                )}
                 <Button
                   variant="outline"
                   onClick={handleDownload}
@@ -568,8 +653,14 @@ export function InvoiceViewPage() {
                 </Button>
                 <Button
                   variant="outline"
-                  onClick={() => setShowSendModal(true)}
-                  className="w-full justify-start gap-3 rounded-xl"
+                  disabled={!perms.canSend}
+                  title={!perms.canSend ? perms.reason : ""}
+                  onClick={
+                    perms.canSend ? () => setShowSendModal(true) : undefined
+                  }
+                  className={`w-full justify-start gap-3 rounded-xl ${
+                    !perms.canSend ? "text-gray-300 cursor-not-allowed" : ""
+                  }`}
                 >
                   <Mail className="w-4 h-4 text-gray-400" />
                   {invoice.status === "draft" ? "Send Invoice" : "Email Client"}
@@ -707,6 +798,49 @@ export function InvoiceViewPage() {
           onSave={handleSaveEdit}
           onClose={() => setEditing(false)}
         />
+      )}
+
+      {showConfirmModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+            <div className="flex items-start gap-3">
+              <div className="flex h-11 w-11 items-center justify-center rounded-full bg-emerald-100">
+                <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+              </div>
+
+              <div className="flex-1">
+                <h2 className="text-lg font-semibold text-gray-900">
+                  Confirm Invoice
+                </h2>
+
+                <p className="mt-1 text-sm text-gray-500 leading-relaxed">
+                  Once confirmed, this invoice will get a final invoice number
+                  and can be sent to the client.
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-6 flex items-center justify-end gap-3">
+              <Button
+                variant="outline"
+                onClick={() => setShowConfirmModal(false)}
+                className="rounded-xl"
+              >
+                Cancel
+              </Button>
+
+              <Button
+                onClick={async () => {
+                  await handleConfirmInvoice();
+                  setShowConfirmModal(false);
+                }}
+                className="rounded-xl bg-emerald-600 hover:bg-emerald-700"
+              >
+                Confirm Invoice
+              </Button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
