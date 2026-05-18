@@ -22,6 +22,8 @@ import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
+import { useUser } from "@clerk/clerk-react";
+import { getClientByName } from "@/lib/api/clientApi";
 
 export interface EditInvoiceData {
   _id: string;
@@ -270,7 +272,8 @@ export function EditInvoiceModal({
   onSave,
   onClose,
 }: EditInvoiceModalProps) {
-  // ── Form state ──
+  const { user } = useUser();
+
   const [form, setForm] = useState({
     clientName: invoice.clientName,
     clientEmail: invoice.clientEmail || "",
@@ -304,6 +307,30 @@ export function EditInvoiceModal({
 
   const [touched, setTouched] = useState<Record<string, boolean>>({});
   const [saving, setSaving] = useState(false);
+  const [clientLoading, setClientLoading] = useState(false);
+
+  useEffect(() => {
+    if (!user || !invoice.clientName) return;
+    setClientLoading(true);
+    getClientByName(user.id, invoice.clientName)
+      .then((client) => {
+        if (!client) return;
+        setForm((prev) => ({
+          ...prev,
+          // Only populate if the invoice prop didn't already have them
+          // (gives priority to any data the invoice itself carries)
+          clientEmail: prev.clientEmail || client.email || "",
+          clientAddress: prev.clientAddress || client.address || "",
+          clientCity: prev.clientCity || client.city || "",
+          clientState: prev.clientState || client.state || "",
+          clientPincode: prev.clientPincode || client.pincode || "",
+        }));
+      })
+      .catch(() => {
+        // Client record may not exist — silently ignore, user can fill manually
+      })
+      .finally(() => setClientLoading(false));
+  }, [user?.id, invoice.clientName]);
 
   const markTouched = (field: string) =>
     setTouched((p) => ({ ...p, [field]: true }));
@@ -367,7 +394,6 @@ export function EditInvoiceModal({
     !errors.lineItems &&
     !errors.lineItemErrors;
 
-  // ── Recalculate helper ──
   const recalc = (
     items = form.lineItems,
     gstPercent = form.gstPercent,
@@ -376,7 +402,6 @@ export function EditInvoiceModal({
     discountValue = form.discountValue
   ) => recompute(items, gstPercent, gstType, discountType, discountValue);
 
-  // ── Line item handlers ──
   const handleLineItemChange = (
     index: number,
     field: keyof LineItem,
@@ -428,7 +453,6 @@ export function EditInvoiceModal({
     setForm({ ...form, lineItems: updated, ...recalc(updated) });
   };
 
-  // ── GST/discount handlers ──
   const setGstPercent = (val: number) =>
     setForm({ ...form, gstPercent: val, ...recalc(undefined, val) });
   const setGstType = (val: "IGST" | "CGST_SGST") =>
@@ -449,7 +473,6 @@ export function EditInvoiceModal({
       ...recalc(undefined, undefined, undefined, form.discountType, val),
     });
 
-  // ── Due date ↔ payment terms sync ──
   const handlePaymentTermsChange = (days: number) => {
     setForm({ ...form, paymentTermsDays: days, dueDate: termsToISO(days) });
   };
@@ -457,7 +480,6 @@ export function EditInvoiceModal({
     setForm({ ...form, dueDate: iso, paymentTermsDays: isoToTerms(iso) });
   };
 
-  // ── Save ──
   const handleSave = async () => {
     markAllTouched();
     if (!isValid) return;
@@ -491,7 +513,12 @@ export function EditInvoiceModal({
                 Edit Invoice
               </DialogTitle>
               <DialogDescription className="text-xs text-gray-400 mt-0.5">
-                {invoice.invoiceNumber} ·{" "}
+                {invoice.invoiceNumber}
+                {clientLoading && (
+                  <span className="ml-2 text-indigo-400">
+                    · Loading client details...
+                  </span>
+                )}
               </DialogDescription>
             </div>
             <Button
@@ -542,7 +569,10 @@ export function EditInvoiceModal({
                         setForm({ ...form, clientEmail: e.target.value })
                       }
                       onBlur={() => markTouched("clientEmail")}
-                      placeholder="Enter client email"
+                      placeholder={
+                        clientLoading ? "Loading..." : "Enter client email"
+                      }
+                      disabled={clientLoading}
                       className={`rounded-xl text-sm focus-visible:ring-indigo-400 ${
                         touched.clientEmail && errors.clientEmail
                           ? "border-red-300"
@@ -562,7 +592,10 @@ export function EditInvoiceModal({
                       onChange={(e) =>
                         setForm({ ...form, clientAddress: e.target.value })
                       }
-                      placeholder="Enter address"
+                      placeholder={
+                        clientLoading ? "Loading..." : "Enter address"
+                      }
+                      disabled={clientLoading}
                       className="rounded-xl text-sm focus-visible:ring-indigo-400"
                     />
                   </FieldWrapper>
@@ -581,7 +614,8 @@ export function EditInvoiceModal({
                           ),
                         })
                       }
-                      placeholder="Enter city"
+                      placeholder={clientLoading ? "Loading..." : "Enter city"}
+                      disabled={clientLoading}
                       className="rounded-xl text-sm focus-visible:ring-indigo-400"
                     />
                   </FieldWrapper>
@@ -600,7 +634,8 @@ export function EditInvoiceModal({
                           ),
                         })
                       }
-                      placeholder="Enter state"
+                      placeholder={clientLoading ? "Loading..." : "Enter state"}
+                      disabled={clientLoading}
                       className="rounded-xl text-sm focus-visible:ring-indigo-400"
                     />
                   </FieldWrapper>
@@ -620,7 +655,10 @@ export function EditInvoiceModal({
                           })
                         }
                         onBlur={() => markTouched("clientPincode")}
-                        placeholder="Enter pincode"
+                        placeholder={
+                          clientLoading ? "Loading..." : "Enter pincode"
+                        }
+                        disabled={clientLoading}
                         maxLength={6}
                         className={`rounded-xl text-sm focus-visible:ring-indigo-400 ${
                           touched.clientPincode && errors.clientPincode
@@ -670,7 +708,6 @@ export function EditInvoiceModal({
                           : "border-gray-100"
                       }`}
                     >
-                      {/* Description + delete */}
                       <div className="flex items-center gap-2">
                         <div className="flex-1">
                           <Input
@@ -706,7 +743,6 @@ export function EditInvoiceModal({
                         </Button>
                       </div>
 
-                      {/* HSN/SAC */}
                       <div>
                         <p className="text-xs text-gray-400 mb-1">
                           HSN/SAC Code
@@ -761,7 +797,6 @@ export function EditInvoiceModal({
                         </div>
                       </div>
 
-                      {/* Qty / Unit / Rate / Amount — 4 columns matching InvoicePreviewCard */}
                       <div className="grid grid-cols-4 gap-2">
                         <div>
                           <p className="text-xs text-gray-400 mb-1">Qty</p>
@@ -856,7 +891,6 @@ export function EditInvoiceModal({
                 Invoice Settings
               </p>
               <div className="grid grid-cols-2 gap-3">
-                {/* GST % */}
                 <FieldWrapper label="GST %">
                   <>
                     <Input
@@ -885,7 +919,6 @@ export function EditInvoiceModal({
                   </>
                 </FieldWrapper>
 
-                {/* GST Type */}
                 <FieldWrapper label="GST Type">
                   <div className="flex gap-2">
                     {(["CGST_SGST", "IGST"] as const).map((type) => (
@@ -904,7 +937,6 @@ export function EditInvoiceModal({
                   </div>
                 </FieldWrapper>
 
-                {/* Payment Terms */}
                 <FieldWrapper label="Payment Terms (days)">
                   <>
                     <Input
@@ -935,7 +967,6 @@ export function EditInvoiceModal({
                   </>
                 </FieldWrapper>
 
-                {/* Due Date */}
                 <FieldWrapper label="Due Date">
                   <Input
                     type="date"
@@ -945,7 +976,6 @@ export function EditInvoiceModal({
                   />
                 </FieldWrapper>
 
-                {/* Discount */}
                 <div className="col-span-2">
                   <FieldWrapper label="Discount">
                     <div className="flex gap-2">
