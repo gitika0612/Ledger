@@ -1,4 +1,4 @@
-# Ledger — AI-Native Invoicing for Indian Freelancers
+# Ledger — AI-Native Invoicing for Freelancers
 
 > Create professional GST-compliant invoices in seconds. Just describe the work — Ledger handles the rest.
 
@@ -8,7 +8,7 @@
 
 ## What is Ledger?
 
-Ledger is a conversational invoicing platform built for India's freelancers and small businesses. Instead of filling forms, you describe your invoice in plain language and the AI creates it instantly — with correct GST splits, client details, line items, and totals.
+Ledger is a conversational invoicing platform built for freelancers and small businesses. Instead of filling forms, you describe your invoice in plain language and the AI creates it instantly — with correct GST splits, client details, line items, and totals.
 
 ```
 "Invoice Priya for 5 days of Next.js work at ₹10k/day with 18% GST"
