@@ -1,5 +1,5 @@
 import { InvoiceAgentState } from "../state";
-import { findSimilarInvoices, invoiceToText } from "../../lib/embeddingService";
+import { findSimilarInvoices } from "../../lib/embeddingService";
 import { Invoice } from "../../models/Invoice";
 import { IInvoiceDocument } from "../../models/Invoice";
 
@@ -19,13 +19,10 @@ function buildMemoryContext(
     lower.includes("previous");
 
   if (isSameWork) {
-    // Bug 6 & 7 fix: for "same work" / "like last time" prompts,
-    // use ONLY the most recent invoice — don't concat all history
-    const latest = invoices[0]; // already sorted by createdAt desc
+    const latest = invoices[0];
     const items = latest.lineItems
       .map((item) => `${item.description} (₹${item.rate}/${item.unit})`)
       .join(", ");
-
     return (
       `Most recent invoice for this client [${
         latest.invoiceMonth || "unknown month"
@@ -38,28 +35,25 @@ function buildMemoryContext(
     );
   }
 
-  // For regular new invoices, show last 3 for rate reference (not all)
   const recent = invoices.slice(0, 3);
   const lines = recent.map((inv, i) => {
     const items = inv.lineItems
       .map((item) => `${item.description} (₹${item.rate}/${item.unit})`)
       .join(", ");
     return (
-      `Invoice ${i + 1} [${inv.invoiceMonth || "unknown month"}]: ` +
-      `Items: ${items} | ` +
-      `GST: ${inv.gstPercent}% ${inv.gstType} | ` +
-      `Terms: ${inv.paymentTermsDays} days | ` +
-      `Total: ₹${inv.total.toLocaleString("en-IN")}`
+      `Invoice ${i + 1} [${inv.invoiceMonth || "unknown"}]: ` +
+      `Items: ${items} | GST: ${inv.gstPercent}% ${inv.gstType} | ` +
+      `Terms: ${inv.paymentTermsDays}d | Total: ₹${inv.total.toLocaleString(
+        "en-IN"
+      )}`
     );
   });
 
-  // Most recent rates for each unique item
   const mostRecentRates: Record<string, number> = {};
   for (const inv of recent) {
     for (const item of inv.lineItems) {
-      if (!mostRecentRates[item.description]) {
+      if (!mostRecentRates[item.description])
         mostRecentRates[item.description] = item.rate;
-      }
     }
   }
   const rateHints = Object.entries(mostRecentRates)
@@ -70,28 +64,45 @@ function buildMemoryContext(
     `Past ${recent.length} invoice(s) for this client:`,
     ...lines,
     `Most recent rates: ${rateHints}`,
-    `Use these as DEFAULT rates when creating new invoice for this client.`,
+    `Use these as DEFAULT rates when creating a new invoice for this client.`,
   ].join("\n");
 }
 
 export async function ragNode(
   state: InvoiceAgentState
 ): Promise<Partial<InvoiceAgentState>> {
+  // Skip RAG for edits and copies — they use session context directly
   if (state.intent === "edit" || state.intent === "copy") {
     return { memoryContext: "No past invoice history for this client." };
   }
 
-  try {
-    const queryText = state.prompt;
+  const promptLower = state.prompt.toLowerCase();
+  const isSameWorkIntent =
+    promptLower.includes("same work") ||
+    promptLower.includes("again for same") ||
+    promptLower.includes("like last time") ||
+    promptLower.includes("again for the same") ||
+    (promptLower.includes("again") && promptLower.includes("same"));
 
-    let pastInvoices = await findSimilarInvoices(
-      state.userId,
-      queryText,
-      undefined,
-      5
-    );
+  // If "same work" AND session already has a recent invoice for this client,
+  // skip RAG (which fetches old DB embeddings) and point to session context.
+  if (
+    isSameWorkIntent &&
+    state.sessionContext &&
+    state.sessionContext !== "No existing invoices in this session."
+  ) {
+    return {
+      memoryContext:
+        "Use the [MOST RECENT] invoice in session context as the source for line items and rates. Do NOT invent new items.",
+    };
+  }
+
+  try {
+    let pastInvoices: (IInvoiceDocument & { similarityScore: number })[] =
+      await findSimilarInvoices(state.userId, state.prompt, undefined, 5);
 
     if (pastInvoices.length === 0) {
+      // Fallback: search by client name extracted from prompt
       const words = state.prompt.split(" ");
       const commonWords = new Set([
         "invoice",
@@ -122,7 +133,6 @@ export async function ragNode(
         (w) =>
           w.length > 2 && !commonWords.has(w.toLowerCase()) && /^[A-Z]/.test(w)
       );
-
       if (possibleClientName) {
         const fallback = await Invoice.find({
           userId: state.userId,
@@ -131,7 +141,11 @@ export async function ragNode(
           .sort({ createdAt: -1 })
           .limit(5)
           .lean();
-        pastInvoices = fallback as any;
+        // Add dummy similarityScore to match findSimilarInvoices return type
+        pastInvoices = fallback.map((inv) => ({
+          ...inv,
+          similarityScore: 0,
+        })) as unknown as (IInvoiceDocument & { similarityScore: number })[];
       }
     }
 
@@ -139,7 +153,6 @@ export async function ragNode(
       pastInvoices as IInvoiceDocument[],
       state.prompt
     );
-
     return {
       retrievedInvoices: pastInvoices as IInvoiceDocument[],
       memoryContext,

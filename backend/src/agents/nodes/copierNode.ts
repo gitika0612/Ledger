@@ -2,46 +2,78 @@ import { ChatOpenAI } from "@langchain/openai";
 import { PromptTemplate } from "@langchain/core/prompts";
 import { InvoiceAgentState, AgentResult } from "../state";
 import { ParsedInvoice, invoiceSchema } from "../schemas/invoiceSchema";
-import { INVOICE_PROMPT } from "../prompts/invoicePrompt";
+import { COPIER_PROMPT } from "../prompts/invoicePrompt";
 import { findClientMatch } from "../../lib/clientMatcher";
-import { recalculateTotals } from "../utils/invoiceUtils";
-import { buildCurrencyContext } from "../utils/currencyService";
+import { recalculateTotals, formatINR } from "../utils/invoiceUtils";
 import { Invoice } from "../../models/Invoice";
 
-function parseSessionInvoices(sessionContext: string) {
+// Parse session context blocks
+function parseSessionBlocks(sessionContext: string): Array<{
+  ref: string;
+  clientName: string;
+  total: string;
+  month: string;
+  raw: string;
+}> {
   if (
     !sessionContext ||
     sessionContext === "No existing invoices in this session."
   )
     return [];
-  const invoices: Array<{
-    ref: string;
-    clientName: string;
-    total: string;
-    month: string;
-  }> = [];
-  for (const block of sessionContext.split("---").filter((b) => b.trim())) {
-    const clientMatch = block.match(/Client:\s*(.+)/);
-    if (clientMatch) {
-      invoices.push({
-        ref: block.match(/Invoice Ref:\s*(.+)/)?.[1]?.trim() ?? "",
+  const blocks = sessionContext.split("---").filter((b) => b.trim());
+  return blocks
+    .map((block) => {
+      const clientMatch = block.match(/Client:\s*(.+)/i);
+      if (!clientMatch) return null;
+      return {
+        ref:
+          block
+            .match(/Invoice Ref:\s*(.+)/i)?.[1]
+            ?.replace(/\[MOST RECENT\]/i, "")
+            .trim() ?? "",
         clientName: clientMatch[1].trim(),
         total: block.match(/Total:\s*₹?([\d,]+)/)?.[1]?.trim() ?? "0",
-        month: block.match(/Invoice Month:\s*(.+)/)?.[1]?.trim() ?? "",
-      });
-    }
-  }
-  return invoices;
+        month: block.match(/Invoice Month:\s*(.+)/i)?.[1]?.trim() ?? "",
+        raw: block.trim(),
+      };
+    })
+    .filter((b): b is NonNullable<typeof b> => b !== null);
 }
 
-function findClientInSession(sessionContext: string, ref: string) {
+// Find matching session blocks by client name or invoice number
+function findMatchingBlocks(sessionContext: string, ref: string) {
   const lower = ref.toLowerCase().trim();
-  return parseSessionInvoices(sessionContext).filter(
-    (inv) =>
-      inv.clientName.toLowerCase().includes(lower) ||
-      lower.includes(inv.clientName.toLowerCase()) ||
-      inv.ref.toLowerCase() === lower
+  const blocks = parseSessionBlocks(sessionContext);
+  return blocks.filter(
+    (b) =>
+      b.clientName.toLowerCase() === lower ||
+      b.clientName.toLowerCase().includes(lower) ||
+      b.ref.toLowerCase() === lower
   );
+}
+
+// Find the source block to copy from (returns most recent match)
+function findSourceBlock(sessionContext: string, ref: string): string | null {
+  const lower = ref.toLowerCase().trim();
+  const blocks = parseSessionBlocks(sessionContext);
+  const matching: string[] = [];
+
+  for (const block of blocks) {
+    const cn = block.clientName.toLowerCase();
+    const invRef = block.ref.toLowerCase();
+    if (lower && (invRef === lower || cn === lower)) {
+      matching.push(block.raw);
+    }
+  }
+
+  if (matching.length > 0) return matching[matching.length - 1]; // most recent
+
+  // Fallback: last block = most recent invoice
+  if (!lower || lower === "last" || lower === "last one") {
+    const allBlocks = parseSessionBlocks(sessionContext);
+    return allBlocks.length > 0 ? allBlocks[allBlocks.length - 1].raw : null;
+  }
+  return null;
 }
 
 async function fetchLastConfirmedInvoice(userId: string): Promise<string> {
@@ -51,94 +83,25 @@ async function fetchLastConfirmedInvoice(userId: string): Promise<string> {
       .lean();
     if (!last) return "";
     const items = last.lineItems
-      .map(
-        (i) =>
-          `${i.description} | Qty: ${i.quantity} | Rate: ₹${i.rate} | Amount: ₹${i.amount}`
-      )
+      .map((i) => `${i.description} | Qty: ${i.quantity} | Rate: ₹${i.rate}`)
       .join("\n");
-    return `Most recent confirmed invoice from database:
-Client: ${last.clientName}
-Invoice Month: ${last.invoiceMonth}
-GST: ${last.gstPercent}% ${last.gstType}
-GST Amount: ₹${last.gstAmount}
-Payment Terms: ${last.paymentTermsDays} days
-Subtotal: ₹${last.subtotal} | Total: ₹${last.total}
-Line Items:\n${items}`;
+    return `Invoice Ref: ${last.invoiceNumber}\nClient: ${last.clientName}\nInvoice Month: ${last.invoiceMonth}\nGST: ${last.gstPercent}% ${last.gstType}\nPayment Terms: ${last.paymentTermsDays} days\nSubtotal: ₹${last.subtotal}\nTotal: ₹${last.total}\nLine Items:\n${items}`;
   } catch {
     return "";
   }
-}
-
-function findSourceBlock(sessionContext: string, ref: string): string | null {
-  if (
-    !sessionContext ||
-    sessionContext === "No existing invoices in this session."
-  )
-    return null;
-  const lower = ref.toLowerCase().trim();
-  const blocks = sessionContext.split("---").filter((b) => b.trim());
-
-  const matching: string[] = [];
-
-  for (const block of blocks) {
-    const clientMatch = block.match(/Client:\s*(.+)/i);
-    const invRefMatch = block.match(/Invoice Ref:\s*(.+)/i);
-    if (!clientMatch) continue;
-    const cn = clientMatch[1].trim().toLowerCase();
-    const invRef =
-      invRefMatch?.[1]
-        ?.trim()
-        .replace(/\s*\[MOST RECENT\]/i, "")
-        .toLowerCase() ?? "";
-
-    // Match by exact invoice number
-    if (lower && invRef === lower) {
-      matching.push(block.trim());
-      continue;
-    }
-    // Match by client name (exact only to avoid false positives)
-    if (lower && cn === lower) {
-      matching.push(block.trim());
-    }
-  }
-
-  // Return most recent match (last in array = most recently created)
-  if (matching.length > 0) return matching[matching.length - 1];
-
-  // Fallback: if ref is empty or "last", return the last block (most recent)
-  if (!lower || lower === "last" || lower === "last one") {
-    return blocks.length > 0 ? blocks[blocks.length - 1].trim() : null;
-  }
-
-  return null;
-}
-
-function buildCopySessionContext(sourceBlock: string): string {
-  return `SOURCE INVOICE TO COPY (use ALL values EXACTLY as shown below):
----
-${sourceBlock}
----
-
-COPY RULES (CRITICAL):
-- Copy the clientName, lineItems, gstPercent, gstType, paymentTermsDays EXACTLY from above
-- Change only the clientName to the NEW client specified in the prompt
-- If GST% is 0 above → set gstPercent=0, gstAmount=0, total=subtotal
-- If GST% is 18 above → keep 18%
-- Do NOT invent or change any amounts
-- Generate fresh invoiceDate = today, invoiceMonth = current month`;
 }
 
 export async function copierNode(
   state: InvoiceAgentState
 ): Promise<Partial<InvoiceAgentState>> {
   const ref = state.targetRef || "";
-  const hasSessionInvoices =
+  const hasSession =
     state.sessionContext &&
     state.sessionContext !== "No existing invoices in this session.";
 
-  // Multiple session matches → ask which one to copy
-  if (ref && hasSessionInvoices) {
-    const matches = findClientInSession(state.sessionContext, ref);
+  // ── Multiple matches → ask which one ──
+  if (ref && hasSession) {
+    const matches = findMatchingBlocks(state.sessionContext, ref);
     if (matches.length > 1) {
       const list = matches
         .map(
@@ -149,22 +112,27 @@ export async function copierNode(
       return {
         agentResult: {
           action: "ambiguous",
-          message: `Found **${matches.length} invoices** for **${ref}**:\n\n${list}\n\nWhich one should I copy? Reply with the invoice number (e.g. **INV-2026-155**).`,
+          message: `Found **${
+            matches.length
+          } invoices** for **${ref}**:\n\n${list}\n\nWhich one should I copy? Reply with the invoice number (e.g. **${
+            matches[0].ref || "INV-2026-001"
+          }**).`,
           targetRef: ref,
         },
       };
     }
   }
 
+  // ── Find source block ──
   const promptLower = state.prompt.toLowerCase();
   const isCrossSession =
-    !hasSessionInvoices &&
+    !hasSession &&
     (promptLower.includes("same as last") ||
       promptLower.includes("last one") ||
       promptLower.includes("like last time") ||
       promptLower.includes("previous invoice"));
 
-  let effectiveSessionContext = state.sessionContext;
+  let sourceBlock: string | null = null;
 
   if (isCrossSession) {
     const dbContext = await fetchLastConfirmedInvoice(state.userId);
@@ -172,25 +140,45 @@ export async function copierNode(
       return {
         agentResult: {
           action: "not_found",
-          message: `I couldn't find any previous confirmed invoices to copy. Please create and confirm an invoice first.`,
+          message: `I couldn't find any previous invoices to copy. Please create and confirm an invoice first.`,
         },
       };
     }
-    effectiveSessionContext = `No existing invoices in this chat session.\n\nYour most recent invoice from history:\n${dbContext}`;
-  } else if (!hasSessionInvoices) {
+    sourceBlock = dbContext;
+  } else if (hasSession) {
+    sourceBlock = findSourceBlock(state.sessionContext, ref || "last");
+    if (!sourceBlock) {
+      return {
+        agentResult: {
+          action: "not_found",
+          message: `I couldn't find **${ref}** in this session. Please check the invoice number and try again.`,
+        },
+      };
+    }
+  } else {
     return {
       agentResult: {
         action: "not_found",
-        message: `I couldn't find any invoices in this session to copy. Please create an invoice first.`,
+        message: `There are no invoices in this session to copy. Please create an invoice first.`,
       },
     };
-  } else {
-    const sourceBlock = findSourceBlock(state.sessionContext, ref || "last");
-    if (sourceBlock) {
-      effectiveSessionContext = buildCopySessionContext(sourceBlock);
-    }
   }
 
+  // ── Extract new client name from prompt ──
+  // "Copy Priya's invoice for Rahul" → "Rahul"
+  // "Same as last one but for Ankit" → "Ankit"
+  // "Copy last invoice for a new client named Meera" → "Meera"
+  const namedMatch =
+    state.prompt.match(/named\s+([A-Z][a-zA-Z]+)/i)?.[1] || // "named Meera"
+    state.prompt.match(/but\s+for\s+([A-Z][a-zA-Z]+)/i)?.[1] || // "but for Ankit"
+    state.prompt.match(/for\s+([A-Z][a-zA-Z]{1,}?)(?:\s+with|\s*$|,)/)?.[1] || // "for Rahul"
+    state.prompt.match(
+      /for\s+a\s+(?:new\s+)?client\s+(?:named\s+)?([A-Z][a-zA-Z]+)/i
+    )?.[1] || // "for a new client named X"
+    "";
+  const newClientName = namedMatch.trim() || "Client";
+
+  // ── Use focused COPIER_PROMPT ──
   const model = new ChatOpenAI({
     modelName: "gpt-4o-mini",
     temperature: 0,
@@ -198,29 +186,47 @@ export async function copierNode(
   });
 
   const structured = model.withStructuredOutput(invoiceSchema);
-  const template = PromptTemplate.fromTemplate(INVOICE_PROMPT);
+  const template = PromptTemplate.fromTemplate(COPIER_PROMPT);
 
   const currentMonth = new Date().toLocaleDateString("en-IN", {
     month: "long",
     year: "numeric",
   });
   const currentDate = new Date().toISOString().split("T")[0];
-  const currencyRates = await buildCurrencyContext();
+
+  // Extract any override instructions from the prompt
+  // e.g. "with no GST", "30 day payment terms", "with 12% GST"
+  const overrideParts: string[] = [];
+  const pl = state.prompt.toLowerCase();
+  if (/no gst|without gst|0% gst|gst exempt/.test(pl))
+    overrideParts.push("Set gstPercent=0, all GST amounts=0");
+  if (/with igst/.test(pl)) overrideParts.push("Set gstType=IGST");
+  const gstPctMatch = pl.match(/with\s+(\d+)%\s+gst/);
+  if (gstPctMatch) overrideParts.push(`Set gstPercent=${gstPctMatch[1]}`);
+  const termMatch = pl.match(/(\d+)\s*day(?:s)?\s+(?:payment\s+)?terms?/);
+  if (termMatch) overrideParts.push(`Set paymentTermsDays=${termMatch[1]}`);
+  const overrides =
+    overrideParts.length > 0
+      ? overrideParts.join("; ")
+      : "None — copy all fields exactly as in source";
 
   const formatted = await template.format({
-    prompt: state.prompt,
-    sessionContext: effectiveSessionContext,
-    memoryContext: state.memoryContext,
-    currentMonth,
+    sourceBlock,
+    newClientName,
     currentDate,
-    currencyRates,
+    currentMonth,
+    overrides,
   });
 
   const raw = (await structured.invoke(formatted)) as ParsedInvoice;
-  const parsedInvoice = recalculateTotals(raw);
+  const parsedInvoice = recalculateTotals({
+    ...raw,
+    clientName: newClientName,
+  });
 
+  // ── Client match for new client ──
   const matchResult = state.userId
-    ? await findClientMatch(state.userId, parsedInvoice.clientName)
+    ? await findClientMatch(state.userId, newClientName)
     : { type: "none" as const, client: null, score: 0 };
 
   let action: AgentResult["action"];
@@ -228,20 +234,16 @@ export async function copierNode(
 
   if (matchResult.type === "exact") {
     action = "copied";
-    message = `Copied invoice for **${
-      parsedInvoice.clientName
-    }** ✓\n\nUsing their saved details. Total: **₹${parsedInvoice.total.toLocaleString(
-      "en-IN"
+    message = `Copied invoice for **${newClientName}** ✓\n\nUsing their saved details. Total: **${formatINR(
+      parsedInvoice.total
     )}** — review it in the side panel.`;
   } else if (matchResult.type === "partial") {
     action = "needs_client";
-    message = `I found a saved client named **${matchResult.client?.name}**.\nIs **${parsedInvoice.clientName}** the same client? Reply **same** or **different**.`;
+    message = `I found a saved client named **${matchResult.client?.name}**.\nIs **${newClientName}** the same client? Reply **same** or **different**.`;
   } else {
     action = "needs_client";
-    message = `Copied invoice for **${
-      parsedInvoice.clientName
-    }**!\n\nTotal: **₹${parsedInvoice.total.toLocaleString(
-      "en-IN"
+    message = `Copied invoice for **${newClientName}**!\n\nTotal: **${formatINR(
+      parsedInvoice.total
     )}**\n\nPlease share their contact details:\n\n**Email** *(required)*\n*(Optional: Address, City, State, Phone, GSTIN)*\n\nOr say **skip**.`;
   }
 

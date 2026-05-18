@@ -10,6 +10,7 @@ import {
   getInvoiceById,
   getClientHistory,
 } from "../controllers/invoiceController";
+import { sendInvoice } from "../controllers/sendInvoice";
 
 const router = Router();
 
@@ -22,5 +23,6 @@ router.get("/", getUserInvoices);
 router.get("/:id", getInvoiceById);
 router.put("/:id", updateInvoice);
 router.delete("/:id", removeInvoice);
+router.post("/:id/send", sendInvoice);
 
 export default router;

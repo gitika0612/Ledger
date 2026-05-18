@@ -6,13 +6,14 @@ import {
   invoiceSchema,
   multiInvoiceSchema,
 } from "../schemas/invoiceSchema";
-import { INVOICE_PROMPT } from "../prompts/invoicePrompt";
-import { MULTI_DETECT_PROMPT } from "../prompts/multiDetectPrompt";
+import {
+  MULTI_INVOICE_PROMPT,
+  MULTI_DETECT_PROMPT,
+} from "../prompts/invoicePrompt";
 import { findClientMatch } from "../../lib/clientMatcher";
 import { buildCurrencyContext } from "../utils/currencyService";
-import { recalculateTotals } from "../utils/invoiceUtils";
+import { recalculateTotals, formatINR } from "../utils/invoiceUtils";
 
-// ── Month helpers ──
 const MONTH_NAMES = [
   "January",
   "February",
@@ -28,49 +29,6 @@ const MONTH_NAMES = [
   "December",
 ];
 
-/**
- * Parse month names from sub-prompt text. Returns 0-indexed month number or -1.
- */
-function extractMonthFromSubPrompt(subPrompt: string): number {
-  const lower = subPrompt.toLowerCase();
-  return MONTH_NAMES.findIndex((m) => lower.includes(m.toLowerCase()));
-}
-
-/**
- * Given a list of sub-prompts and the expected ordered months, patch each
- * sub-prompt so it references the correct month label.
- *
- * The LLM sometimes hallucinates months (e.g. April for all). We correct
- * this by:
- * 1. Parsing what months the detection schema said are needed
- * 2. Replacing the month reference in each sub-prompt with the correct one
- */
-function patchSubPromptMonths(
-  subPrompts: string[],
-  expectedMonths: string[] // e.g. ["January 2026", "February 2026", "March 2026"]
-): string[] {
-  return subPrompts.map((sp, i) => {
-    const expected = expectedMonths[i];
-    if (!expected) return sp;
-
-    // Replace any "Month YYYY" pattern with the expected month
-    const patched = sp.replace(
-      /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4}\b/gi,
-      expected
-    );
-
-    // If no replacement happened, append the month
-    if (patched === sp) {
-      return `${sp.trim()} for ${expected}`;
-    }
-    return patched;
-  });
-}
-
-/**
- * Extract specific months from a prompt like "Jan, Feb, March" or "January, February, March".
- * Returns array of "Month YYYY" strings if found, or empty array.
- */
 function extractExplicitMonths(prompt: string, year: number): string[] {
   const monthAbbrevMap: Record<string, number> = {
     jan: 0,
@@ -98,21 +56,33 @@ function extractExplicitMonths(prompt: string, year: number): string[] {
     december: 11,
   };
 
+  // Step 1: extract months to SKIP (words after "skip", "except", "not including")
+  const skipSet = new Set<number>();
+  const lower = prompt.toLowerCase();
+  const skipRegex =
+    /(?:skip|except|not\s+including?|excluding?)\s+([\w,\s]+?)(?:\.|$)/g;
+  let skipMatch;
+  while ((skipMatch = skipRegex.exec(lower)) !== null) {
+    for (const part of skipMatch[1].split(/[\s,]+/)) {
+      const clean = part.replace(/[^a-z]/g, "");
+      if (clean in monthAbbrevMap) skipSet.add(monthAbbrevMap[clean]);
+    }
+  }
+
+  // Step 2: extract included months, excluding skip words
   const found: number[] = [];
-  const parts = prompt.toLowerCase().split(/[\s,]+/);
-  for (const part of parts) {
+  for (const part of lower.split(/[\s,()]+/)) {
     const clean = part.replace(/[^a-z]/g, "");
     if (clean in monthAbbrevMap) {
       const idx = monthAbbrevMap[clean];
-      if (!found.includes(idx)) found.push(idx);
+      if (!found.includes(idx) && !skipSet.has(idx)) {
+        found.push(idx);
+      }
     }
   }
   return found.map((idx) => `${MONTH_NAMES[idx]} ${year}`);
 }
 
-/**
- * Generate N consecutive months starting from startMonth (0-indexed).
- */
 function generateConsecutiveMonths(
   startMonthIdx: number,
   startYear: number,
@@ -132,6 +102,32 @@ function generateConsecutiveMonths(
   return result;
 }
 
+function monthToDate(monthStr: string): string {
+  // "April 2026" → "2026-04-01"
+  const [monthName, yearStr] = monthStr.split(" ");
+  const monthIdx = MONTH_NAMES.indexOf(monthName);
+  const year = parseInt(yearStr);
+  if (monthIdx === -1 || isNaN(year))
+    return new Date().toISOString().split("T")[0];
+  return `${year}-${String(monthIdx + 1).padStart(2, "0")}-01`;
+}
+
+// Extract client name from prompt
+function extractClientName(prompt: string): string {
+  const match =
+    // "Invoice Priya for..." or "Bill Rahul for..."
+    prompt.match(
+      /^(?:invoice|bill|create(?:\s+invoice)?(?:\s+for)?|monthly(?:\s+invoice)?(?:\s+for)?(?:\s+retainer)?(?:\s+for)?)\s+([A-Z][a-zA-Z]+)/i
+    ) ||
+    // "[Name]'s invoice" possessive
+    prompt.match(/([A-Z][a-zA-Z]+)'s\s+(?:[\d,₹]+\s+)?invoice/i) ||
+    // "Divide/Split [Name]'s"
+    prompt.match(/(?:divide|split)\s+([A-Z][a-zA-Z]+)/i) ||
+    // "for [Name]"
+    prompt.match(/\bfor\s+([A-Z][a-zA-Z]+)/i);
+  return match?.[1] ?? "Client";
+}
+
 export async function multiInvoiceNode(
   state: InvoiceAgentState
 ): Promise<Partial<InvoiceAgentState>> {
@@ -149,9 +145,8 @@ export async function multiInvoiceNode(
     year: "numeric",
   });
   const currentDate = now.toISOString().split("T")[0];
-  const currencyRates = await buildCurrencyContext();
 
-  // ── Step 1: Detect sub-prompts ──
+  // ── Step 1: Detect how many invoices and which months ──
   const multiStructured = model.withStructuredOutput(multiInvoiceSchema);
   const multiTemplate = PromptTemplate.fromTemplate(MULTI_DETECT_PROMPT);
   const multiFormatted = await multiTemplate.format({
@@ -165,18 +160,16 @@ export async function multiInvoiceNode(
     return { isMultiple: false };
   }
 
+  // Use subPrompts count — the detect prompt now generates meaningful subPrompts again
   const count = detection.subPrompts.length;
 
-  // ── Step 2: Determine correct ordered months ──
-  // Try to extract explicit months from the original prompt first
+  // ── Step 2: Determine correct months ──
   const explicitMonths = extractExplicitMonths(state.prompt, currentYear);
-
   let expectedMonths: string[];
+
   if (explicitMonths.length === count) {
-    // User said "Jan, Feb, March" — use exactly those
     expectedMonths = explicitMonths;
-  } else if (explicitMonths.length > 0 && explicitMonths.length !== count) {
-    // Partial match — try consecutive from first explicit month
+  } else if (explicitMonths.length > 0) {
     const firstIdx = MONTH_NAMES.indexOf(explicitMonths[0].split(" ")[0]);
     expectedMonths = generateConsecutiveMonths(
       firstIdx >= 0 ? firstIdx : currentMonthIdx,
@@ -184,7 +177,6 @@ export async function multiInvoiceNode(
       count
     );
   } else {
-    // "6 months" / "3 invoices" without specifying — start from current month
     expectedMonths = generateConsecutiveMonths(
       currentMonthIdx,
       currentYear,
@@ -192,38 +184,42 @@ export async function multiInvoiceNode(
     );
   }
 
-  // ── Step 3: Patch sub-prompts with correct months ──
-  const patchedSubPrompts = patchSubPromptMonths(
-    detection.subPrompts,
-    expectedMonths
-  );
+  // ── Step 3: Extract base info from prompt ──
+  const clientName = extractClientName(state.prompt);
+  const currencyRates = await buildCurrencyContext();
 
-  // ── Step 4: Parse each sub-prompt ──
+  // ── Step 4: Generate each invoice with a focused per-invoice prompt ──
   const invoiceStructured = model.withStructuredOutput(invoiceSchema);
-  const invoiceTemplate = PromptTemplate.fromTemplate(INVOICE_PROMPT);
+  const invoiceTemplate = PromptTemplate.fromTemplate(MULTI_INVOICE_PROMPT);
 
   const parsedInvoices: ParsedInvoice[] = [];
-  for (let i = 0; i < patchedSubPrompts.length; i++) {
-    const subPrompt = patchedSubPrompts[i];
-    const expectedMonth = expectedMonths[i];
+
+  for (let i = 0; i < count; i++) {
+    const invoiceMonth = expectedMonths[i];
+    const invoiceDate = monthToDate(invoiceMonth);
+
     const formatted = await invoiceTemplate.format({
-      prompt: subPrompt,
-      sessionContext: "No existing invoices in this session.",
+      index: String(i + 1),
+      total: String(count),
+      basePrompt: state.prompt,
+      invoiceMonth,
+      invoiceDate,
+      clientName,
       memoryContext: state.memoryContext,
-      currentMonth: expectedMonth,
-      currentDate,
-      currencyRates,
     });
+
     const raw = (await invoiceStructured.invoke(formatted)) as ParsedInvoice;
-    // Force correct invoiceMonth regardless of what the LLM returned
+    // Force-override month/date regardless of what LLM returned
     const corrected = recalculateTotals({
       ...raw,
-      invoiceMonth: expectedMonth,
+      clientName,
+      invoiceMonth,
+      invoiceDate,
     });
     parsedInvoices.push(corrected);
   }
 
-  // ── Step 5: Find client matches ──
+  // ── Step 5: Client match ──
   const invoicesWithMatch = await Promise.all(
     parsedInvoices.map(async (invoice) => {
       const matchResult = state.userId
@@ -233,17 +229,14 @@ export async function multiInvoiceNode(
     })
   );
 
-  // ── Step 6: Build message ──
-  const clientName = parsedInvoices[0]?.clientName || "client";
-  const months = expectedMonths.join(", ");
+  // ── Step 6: Summary message ──
   const totalSum = parsedInvoices.reduce((sum, inv) => sum + inv.total, 0);
+  const monthList = expectedMonths.join(", ");
 
   const result: AgentResult = {
     action: "multi_created",
-    message: `Done! Prepared **${
-      parsedInvoices.length
-    } invoices** for **${clientName}** (${months}).\n\nTotal value: **₹${totalSum.toLocaleString(
-      "en-IN"
+    message: `Done! Prepared **${count} invoices** for **${clientName}** (${monthList}).\n\nTotal value: **${formatINR(
+      totalSum
     )}**\n\nReview each invoice in the side panel.`,
     invoices: parsedInvoices,
     invoicesWithMatch,

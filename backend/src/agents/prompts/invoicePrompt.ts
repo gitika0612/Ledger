@@ -1,354 +1,295 @@
-export const INVOICE_PROMPT = `You are an expert invoice parser for Indian freelancers and businesses.
-Parse the invoice request and extract ALL details accurately.
-Return ONLY valid JSON matching the schema. No explanation text outside JSON.
+/**
+ * invoicePrompts.ts — one focused prompt per agent node.
+ */
 
-\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
-SECTION 1 \u2014 CURRENCY & NUMBER PARSING
-\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
+// ─────────────────────────────────────────────────────────────
+// GENERATOR
+// Fix Issue 1: GST inclusive → ONE line item with back-calculated subtotal
+// Fix Issue 2: Credit note must have actual line items with amount
+// Fix Issue 1b: memoryContext must NOT pollute a different client's invoice
+// ─────────────────────────────────────────────────────────────
+export const GENERATOR_PROMPT = `You are an invoice parser for Indian freelancers.
+Parse the request and return valid invoice JSON. No explanation.
 
-LIVE EXCHANGE RATES (fetched at time of request):
+TODAY: {currentDate}
+CURRENT MONTH: {currentMonth}
+
+━━━ EXCHANGE RATES ━━━
 {currencyRates}
+Convert all foreign currency to INR. "k"=×1000. "lakh"=×100000.
 
-- All output amounts must be in INR (\u20b9)
-- "k" shorthand: 25k = 25,000 | 1.5k = 1,500
-- "lakh" / "lac": 1 lakh = 1,00,000 | 1.5 lakh = 1,50,000
-- "Rs", "INR", "\u20b9" \u2014 no conversion needed
-- For foreign currencies, use the live rates above. Always convert to INR.
-
-GST-INCLUSIVE BACK-CALCULATION:
-ONLY back-calculate when user EXPLICITLY says the amount already includes GST.
-Trigger words: "GST included", "inclusive of GST", "all inclusive", "GST inclusive", "including GST"
-
-- "\u20b950,000 inclusive of GST" \u2192 back-calculate: subtotal = 50000 \u00f7 1.18 = \u20b942,373
-- "50k GST included" \u2192 back-calculate: subtotal = 50000 \u00f7 1.18 = \u20b942,373
-
-DO NOT back-calculate when user says:
-- "with 18% GST" \u2192 rate is the BASE price, GST is ADDED ON TOP
-- "apply 18% GST" \u2192 rate is the BASE price
-- "\u20b910,000/day with 18% GST" \u2192 rate = \u20b910,000, total = rate \u00d7 days \u00d7 1.18
-
-RULE: "with GST" = GST on top. "GST included" = GST already inside the amount.
-
-\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
-SECTION 2 \u2014 INTENT DETECTION
-\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
-
-intent must be exactly one of: "new" | "edit" | "copy"
-
-"new" = fresh invoice. Use when:
-  - No reference to existing invoice
-  - "Invoice Priya for...", "Bill Rahul for...", "Create invoice..."
-  - "Invoice Priya again" (creates new using memory, not editing old one)
-
-"edit" = modify existing. Use when prompt contains:
-  - add / remove / replace / change / update / set / increase / decrease
-  - "Add GST to INV-2026-001"
-  - "Replace logo design with logo in last invoice"
-  - "Add late fee to INV-2026-001"
-  - "Remove the hosting item"
-  - "in last invoice" + any modification = ALWAYS edit
-  - "in INV-XXX" + any modification = ALWAYS edit
-
-"copy" = duplicate for different client. Use when:
-  - "Same invoice for Ankit"
-  - "Copy Rahul's invoice for Priya"
-  - "Same as last one but for Ankit"
-
-\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
-SECTION 3 \u2014 SESSION & MEMORY CONTEXT
-\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
-
-SESSION CONTEXT (invoices created in this chat):
-{sessionContext}
-
-MEMORY CONTEXT (this client's past invoice history from database):
+━━━ CLIENT HISTORY ━━━
 {memoryContext}
+IMPORTANT: Use history ONLY if the prompt is for the SAME client name as in history.
+If the prompt is for a DIFFERENT client, IGNORE the history entirely.
+If history says "Use EXACTLY these items" → copy those items verbatim, do NOT create new ones.
 
-Using session context:
-- For edit/copy: look up EXACT existing line items from session context
-- If user says "last invoice" \u2192 use the most recent invoice in session context
-- If session context is empty but memory context has invoices \u2192 use memory context
+━━━ LINE ITEMS ━━━
+Parse ONLY what the user explicitly mentions. Do NOT invent items from history.
+• "5 days Next.js at ₹10k/day"       → qty=5 unit="day" rate=10000 amount=50000
+• "40hrs React consulting ₹2,500/hr" → qty=40 unit="hour" rate=2500 amount=100000
+• "logo ₹20k, guidelines ₹15k"       → 2 items at those exact amounts
+• "₹1L — 40% design, 60% dev"        → 2 items: Design ₹40000, Dev ₹60000 (ONE invoice)
+• "₹50k for web maintenance"          → qty=1 unit="item" rate=50000 amount=50000
+• "₹1,18,000 inclusive of 18% GST"   → ONE item, back-calculate subtotal (see GST RULES)
 
-Using memory context:
-- For "Invoice Priya again for same work" \u2192 copy line items and rates from memory
-- For "another invoice like last time" \u2192 replicate the previous invoice structure
-- Memory rates take precedence over guessed rates
+━━━ GST RULES ━━━
+• Default: gstPercent=18, gstType="CGST_SGST"
+• "no GST" / "0% GST" / "exempt"     → gstPercent=0, all GST amounts=0, total=subtotal
+• "12% GST" / "5% GST"               → use that percent
+• "IGST" / "inter-state"             → gstType="IGST"
+• "with X% GST" / "with GST"         → rate is BASE price, GST added ON TOP. NEVER back-calculate.
+  Example: "₹30,000 with 5% GST" → subtotal=30000, gstAmount=1500, total=31500
+• "GST included" / "inclusive of GST" / "including GST":
+  → The stated amount IS the final total. Derive subtotal from it, never round the total.
+  → gstAmount = round(total × gstRate ÷ (100 + gstRate))
+  → lineItem amount (subtotal) = total − gstAmount
+  → Example: ₹50,000 GST included at 18%:
+     gstAmount = round(50000 × 18 ÷ 118) = round(7627.1) = 7627
+     lineItem amount = 50000 − 7627 = 42373, total = 50000 EXACTLY
+  → Example: ₹1,18,000 inclusive of 18% GST:
+     gstAmount = round(118000 × 18 ÷ 118) = 18000
+     lineItem amount = 118000 − 18000 = 100000, total = 118000
+  → ONE line item only. Do NOT split into multiple items.
 
-\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
-SECTION 4 \u2014 EDIT RULES (intent = "edit")
-\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
-
-CRITICAL: changedFields lists ONLY what the user explicitly asked to change.
-
-ADDING a line item (user says "add"):
-  - Keep ALL existing line items from session context INTACT
-  - Append the new line item to the end
-  - Include "lineItems" in changedFields
-  - Return the FULL lineItems array: existing + new item
-  - NEVER remove existing items when user says "add"
-
-REMOVING a line item (user says "remove"):
-  - Find and remove ONLY that specific item
-  - Return remaining items
-  - Include "lineItems" in changedFields
-
-REPLACING a line item (user says "replace X with Y" or "change X to Y"):
-  - Find X using LINE ITEM MATCHING RULES below
-  - If found: substitute Y for X, keep all other items
-  - If NOT found: set changedFields = [], omit lineItems, add warning
-
-NON-LINE-ITEM edits:
-  - "Add GST" \u2192 set gstPercent = 18 (default), gstType = "CGST_SGST", include "gstPercent" and "gstType" in changedFields
-  - "Change payment terms to 30 days" \u2192 paymentTermsDays = 30, changedFields = ["paymentTermsDays"]
-  - "Apply 10% discount" \u2192 discountType = "percent", discountValue = 10, changedFields = ["discountType","discountValue"]
-  - "Add 2% late fee" \u2192 ADD a new line item "Late Fee (2%)" with amount = 2% of current subtotal
-
-LATE FEE RULE (special edit):
-  - "Add N% late fee to [invoice]" is ALWAYS an edit
-  - Look up the invoice subtotal from session context
-  - Add line item: {{ description: "Late Fee (N%)", quantity: 1, unit: "item", rate: subtotal * N/100, amount: same }}
-  - Keep all existing line items + append late fee
-  - changedFields = ["lineItems"]
-
-STRICT SAFETY RULES FOR EDITS:
-  - NEVER change clientName unless user explicitly asks
-  - NEVER change invoiceMonth/invoiceDate unless user explicitly asks
-  - NEVER remove existing line items unless user explicitly says to remove them
-  - Preserve all existing fields not mentioned by the user
-
-LINE ITEM MATCHING RULES:
-  - Exact phrase match first (case-insensitive)
-  - Fuzzy only if wording clearly refers to same service:
-    - "hosting fees" \u2194 "web hosting fees" \u2713
-    - "logo design" \u2194 "logo" \u2713 (same service, shortened name)
-    - "React development" \u2260 "full-stack development" \u2717
-
-\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
-SECTION 5 \u2014 SPECIAL INVOICE TYPES (intent = "new")
-\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
-
-MILESTONE INVOICE:
-  "Invoice for project milestone 1 of 3, total project \u20b93,00,000"
-  \u2192 milestoneAmount = 3,00,000 \u00f7 3 = \u20b91,00,000
-  \u2192 lineItems = [{{ description: "Project Milestone 1 of 3", quantity: 1, unit: "milestone", rate: 100000, amount: 100000 }}]
-  \u2192 notes = "Milestone 1 of 3 \u2014 Project total \u20b93,00,000"
-  \u2192 NEVER use the full project amount as the invoice amount
-
-ADVANCE PAYMENT:
-  "\u20b950,000 advance for branding project"
-  \u2192 lineItems = [{{ description: "Advance Payment \u2014 Branding Project", quantity: 1, unit: "item", rate: 50000, amount: 50000 }}]
-  \u2192 notes = "Advance payment against project"
-
-RETAINER INVOICE:
-  "Retainer invoice for Priya \u20b920,000/month"
-  \u2192 lineItems = [{{ description: "Monthly Retainer", quantity: 1, unit: "month", rate: 20000, amount: 20000 }}]
-  \u2192 notes = "Monthly retainer invoice"
-
-PRO-RATA BILLING:
-  "15 days of March at \u20b950,000/month"
-  \u2192 daysInMonth = 31 (March), proRataAmount = round(15/31 \u00d7 50000) = \u20b924,194
-  \u2192 lineItems = [{{ description: "Pro-rata Services (15/31 days in March)", quantity: 15, unit: "day", rate: round(50000/31), amount: 24194 }}]
-  \u2192 Days per month: Jan=31, Feb=28, Mar=31, Apr=30, May=31, Jun=30, Jul=31, Aug=31, Sep=30, Oct=31, Nov=30, Dec=31
-
-HOURLY WITH CAP:
-  "Up to 20 hours at \u20b92,000/hr but max \u20b935,000"
-  \u2192 Normal total = 20 \u00d7 2000 = \u20b940,000 > cap \u20b935,000
-  \u2192 Use cap: amount = 35000, rate = 35000/20 = 1750
-  \u2192 lineItems = [{{ description: "Development (capped at max \u20b935,000)", quantity: 20, unit: "hour", rate: 1750, amount: 35000 }}]
-  \u2192 notes = "Hourly rate capped at \u20b935,000 maximum"
-
-PERCENTAGE SPLIT:
-  "\u20b91,00,000 \u2014 40% design, 60% development"
-  \u2192 THIS IS ONE SINGLE INVOICE with 2 line items. NOT multiple invoices. NOT a split.
-  \u2192 intent = "new", create ONE invoice
-  \u2192 lineItems = [
-      {{ description: "Design", quantity: 1, unit: "item", rate: 40000, amount: 40000 }},
-      {{ description: "Development", quantity: 1, unit: "item", rate: 60000, amount: 60000 }}
-    ]
-  \u2192 subtotal = 1,00,000 (sum of both line items)
-
-CREDIT NOTE / AMENDMENT:
-  "Credit note for INV-2026-001 for \u20b95,000 due to revision"
-  \u2192 Create a normal invoice with 0% GST
-  \u2192 lineItems = [{{ description: "Credit Adjustment \u2014 Revision", quantity: 1, unit: "item", rate: 5000, amount: 5000 }}]
-  \u2192 notes = "Credit note against INV-2026-001. Deduct \u20b95,000 from next invoice."
-  \u2192 gstPercent = 0, gstAmount = 0, total = 5000
-  \u2192 All amounts are POSITIVE \u2014 the notes field explains it is a credit
-
-DISCOUNT INVOICE:
-  "\u20b950,000 for development with 10% discount and 18% GST"
-  \u2192 lineItems = [{{ description: "Development", quantity: 1, unit: "item", rate: 50000, amount: 50000 }}]
-  \u2192 discountType = "percent", discountValue = 10
-  \u2192 discountAmount = 50000 \u00d7 0.10 = 5000
-  \u2192 taxableAmount = 45000
-  \u2192 gstAmount = 45000 \u00d7 0.18 = 8100
-  \u2192 total = 53100
-
-NATURAL LANGUAGE TOTALS:
-  "We agreed on \u20b930,000 for last week's work"
-  \u2192 Create a single line item with that amount, reasonable description
-
-DATE SPECIFIC:
-  "Dated 1st April" / "dated April 1" / "dated 1 April 2026"
-  \u2192 invoiceDate = "2026-04-01"
-  \u2192 invoiceMonth = "April 2026"
-  "Dated 15th March" \u2192 invoiceDate = "2026-03-15", invoiceMonth = "March 2026"
-
-\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
-SECTION 6 \u2014 GST RULES
-\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
-
-- Default: gstPercent = 18, gstType = "CGST_SGST"
-- "no GST" / "0% GST" / "GST exempt" \u2192 gstPercent = 0, all GST amounts = 0, total = subtotal
-- "12% GST" \u2192 gstPercent = 12
-- "IGST" / "inter-state" \u2192 gstType = "IGST"
-- For CGST_SGST: cgstAmount = sgstAmount = gstAmount / 2, igstAmount = 0
-- For IGST: igstAmount = gstAmount, cgstAmount = sgstAmount = 0
-
-\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
-SECTION 7 \u2014 DISCOUNT RULES
-\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
-
-- Default: discountType = "none", discountValue = 0, discountAmount = 0
-- "10% discount" \u2192 discountType = "percent", discountValue = 10
-- "\u20b95,000 off" / "\u20b95k discount" \u2192 discountType = "amount", discountValue = 5000
-
-\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
-SECTION 8 \u2014 CALCULATION
-\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
-
+━━━ CALCULATIONS ━━━
+For GST-INCLUSIVE invoices: use the values from the GST RULES section above — do NOT recalculate total.
+For all other invoices:
 1. subtotal = sum of all lineItem amounts
-2. discountAmount: "none"=0 | "percent"=round(subtotal\u00d7value/100) | "amount"=value
-3. taxableAmount = subtotal \u2212 discountAmount
-4. gstAmount = round(taxableAmount \u00d7 gstPercent / 100)
-5. CGST_SGST: cgstAmount = round(gstAmount/2), sgstAmount = gstAmount\u2212cgstAmount, igstAmount = 0
-   IGST: igstAmount = gstAmount, cgstAmount = 0, sgstAmount = 0
+2. discountAmount = percent→round(subtotal×val/100) | amount→val | none→0
+3. taxableAmount = subtotal − discountAmount
+4. gstAmount = round(taxableAmount × gstPercent / 100)
+5. CGST_SGST: cgst=sgst=round(gstAmount/2), igst=0 | IGST: igst=gstAmount, cgst=sgst=0
 6. total = taxableAmount + gstAmount
 
-\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
-SECTION 9 \u2014 DATE RULES
-\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
+━━━ DATES ━━━
+• No date → invoiceDate=today, invoiceMonth=currentMonth
+• "dated 1st April" → invoiceDate="YYYY-04-01", invoiceMonth="April YYYY"
+• invoiceMonth ALWAYS = "Month YYYY" e.g. "May 2026"
 
-Today: {currentDate}
+━━━ PAYMENT TERMS ━━━
+default=15 days | "net 30"→30 | "immediate"→0
+
+━━━ SPECIAL TYPES ━━━
+
+CREDIT NOTE — "credit note for ₹X due to [reason]":
+→ This creates a NEW invoice (not an edit)
+→ MUST have exactly ONE line item with the credit amount
+→ lineItems = one item: description="Credit Adjustment — [reason]", qty=1, unit="item", rate=[the ₹X amount], amount=[the ₹X amount]
+→ Example: "credit note ₹5,000 due to revision" → rate=5000, amount=5000
+→ gstPercent=0, gstAmount=0, total=[the ₹X amount]
+→ notes = "Credit note: [reason]. Deduct from next invoice."
+→ NEVER return empty lineItems, NEVER set amount=0
+
+MILESTONE — "milestone 1 of 3, total ₹3L":
+→ amount = 300000÷3 = 100000
+→ lineItems = one item: description="Project Milestone 1 of 3", qty=1, unit="milestone", rate=100000, amount=100000
+→ notes = "Milestone 1 of 3 — Project total ₹3,00,000"
+
+ADVANCE → description="Advance Payment — [Project name]", qty=1
+
+RETAINER → description="Monthly Retainer", unit="month", qty=1
+
+PRO-RATA — "15 days of April at ₹60,000/month":
+→ April has 30 days → dailyRate = round(60000÷30) = 2000
+→ lineItems = one item: description="Pro-rata Services (15/30 days)", qty=15, unit="day", rate=2000, amount=30000
+→ Days: Jan=31, Feb=28, Mar=31, Apr=30, May=31, Jun=30, Jul=31, Aug=31, Sep=30, Oct=31, Nov=30, Dec=31
+
+DISCOUNT:
+• "10% off" → discountType="percent", discountValue=10
+• "₹5k off" → discountType="amount", discountValue=5000
+• default → discountType="none", discountValue=0
+
+HSN/SAC: 998314=software dev | 998312=web design | 998313=IT consulting | 998315=data processing
+
+━━━ REQUEST ━━━
+{prompt}`;
+
+// ─────────────────────────────────────────────────────────────
+// EDITOR
+// ─────────────────────────────────────────────────────────────
+export const EDITOR_PROMPT = `You are editing an existing invoice. Apply ONLY the requested change.
+
+━━━ CURRENT INVOICE ━━━
+Client: {clientName}
+Invoice Month: {invoiceMonth}
+GST: {gstPercent}% {gstType}
+Discount: {discountType} {discountValue}
+Payment Terms: {paymentTermsDays} days
+Notes: {notes}
+Subtotal: ₹{subtotal}
+Total: ₹{total}
+
+Line Items:
+{lineItems}
+
+━━━ EDIT REQUEST ━━━
+{prompt}
+
+━━━ EDIT RULES ━━━
+
+ADD item ("add X ₹Y"):
+→ Keep ALL existing line items EXACTLY as listed above
+→ Append ONLY the new item at the end
+→ changedFields = ["lineItems"]
+→ NEVER remove or rename existing items
+
+REMOVE item ("remove X"):
+→ Delete only that specific item, keep all others
+→ changedFields = ["lineItems"]
+
+REPLACE ("replace X with Y" or "replace X to Y"):
+→ Find X by name (fuzzy: "Services"≈"Service", "logo design"≈"logo")
+→ Swap description to Y, keep same rate/qty unless new amount specified
+→ changedFields = ["lineItems"]
+→ If X not found: changedFields=[], warning="Item not found"
+
+GST change:
+→ Update gstPercent/gstType ONLY, keep all line items unchanged
+→ changedFields = ["gstPercent", "gstType"]
+
+OTHER:
+→ "change payment terms to 30 days" → paymentTermsDays=30, changedFields=["paymentTermsDays"]
+→ "apply 10% discount" → discountType="percent", discountValue=10, changedFields=["discountType","discountValue"]
+→ "add 2% late fee" → append line item: description="Late Fee (2%)", qty=1, unit="item", rate=round(subtotal×0.02), changedFields=["lineItems"]
+→ "change date to 1st May" → invoiceDate="2026-05-01", invoiceMonth="May 2026", changedFields=["invoiceDate","invoiceMonth"]
+
+STRICT SAFETY:
+→ NEVER change clientName unless explicitly asked
+→ NEVER change invoiceMonth unless explicitly asked
+→ NEVER invent line items
+→ changedFields = ONLY what changed
+
+RECALCULATE after edit:
+1. subtotal = sum of lineItem amounts
+2. discountAmount = percent→round(subtotal×val/100) | amount→val | none→0
+3. taxableAmount = subtotal − discountAmount
+4. gstAmount = round(taxableAmount × gstPercent / 100)
+5. CGST_SGST: cgst=sgst=round(gstAmount/2), igst=0
+6. total = taxableAmount + gstAmount`;
+
+// ─────────────────────────────────────────────────────────────
+// COPIER
+// ─────────────────────────────────────────────────────────────
+export const COPIER_PROMPT = `You are copying an existing invoice for a new client.
+
+━━━ SOURCE INVOICE TO COPY ━━━
+{sourceBlock}
+
+━━━ NEW CLIENT ━━━
+clientName = "{newClientName}"
+
+━━━ ADDITIONAL CHANGES REQUESTED ━━━
+{overrides}
+
+━━━ COPY RULES ━━━
+• Copy line items, quantities, rates, amounts EXACTLY from source — do NOT change amounts
+• Copy gstPercent, gstType, paymentTermsDays EXACTLY from source
+• If source GST is 0% → set gstPercent=0, do NOT default to 18%
+• Set clientName = "{newClientName}"
+• Set invoiceDate = {currentDate}
+• Set invoiceMonth = {currentMonth}
+• Do NOT copy the invoice number
+• Apply ADDITIONAL CHANGES from the section above AFTER copying (e.g. "no GST" → set gstPercent=0, "30 day terms" → paymentTermsDays=30)
+• Recalculate totals after any changes`;
+
+// ─────────────────────────────────────────────────────────────
+// MULTI_INVOICE — one invoice per month in a batch
+// Fix Issue 4/5/6: each invoice gets exactly ONE line item for that month
+// ─────────────────────────────────────────────────────────────
+export const MULTI_INVOICE_PROMPT = `You are creating invoice #{index} of {total} in a batch.
+
+━━━ BASE REQUEST ━━━
+{basePrompt}
+
+━━━ THIS INVOICE ONLY ━━━
+invoiceMonth = "{invoiceMonth}"
+invoiceDate = "{invoiceDate}"
+clientName = "{clientName}"
+
+━━━ RULES ━━━
+• Create ONE line item for the service described in the base request
+• The line item amount = the per-month amount stated in the base request
+• Use EXACTLY invoiceMonth and invoiceDate as given above — never change them
+• Use the same GST%, payment terms, and description as the base request
+• Do NOT combine months — this invoice is for {invoiceMonth} ONLY
+• Do NOT copy from previous invoices in the batch — parse fresh from base request
+
+EXAMPLE:
+Base: "web maintenance ₹15,000/month for 6 months with 18% GST"
+This invoice month: "May 2026"
+→ lineItems = one item: description="Web Maintenance", qty=1, unit="month", rate=15000, amount=15000
+→ gstPercent=18, subtotal=15000, gstAmount=2700, total=17700
+→ invoiceMonth="May 2026" (exactly as given)`;
+
+// ─────────────────────────────────────────────────────────────
+// MULTI_DETECT — restored to working version with subPrompts
+// Fix Issue 4/5/6: restore the original detailed prompt that worked
+// ─────────────────────────────────────────────────────────────
+export const MULTI_DETECT_PROMPT = `You are detecting if a prompt requests MULTIPLE SEPARATE invoices.
+
+Current date: {currentDate}
 Current month: {currentMonth}
 
-- No date mentioned \u2192 invoiceDate = today, invoiceMonth = current month ("April 2026")
-- "1st April" / "April 1" / "1 April" \u2192 invoiceDate = "YYYY-04-01"
-- "15th March" \u2192 invoiceDate = "YYYY-03-15"
-- Only month mentioned \u2192 invoiceDate = 1st of that month (past/future) or today (current month)
-- ALWAYS format invoiceMonth as "Month YYYY" e.g. "April 2026" \u2014 NEVER just "April"
+MULTI-INVOICE TRIGGERS — return isMultiple=true when:
+• Specific months listed: "for Jan, Feb, March" → 3 invoices
+• "N months" / "for 6 months" / "monthly for N months" → N invoices from current month
+• "3 invoices" → 3 invoices
+• Multiple clients: "Invoice Rahul ₹X and Priya ₹Y" → 2 invoices
 
-\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
-SECTION 10 \u2014 HSN/SAC & PAYMENT TERMS
-\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
+SINGLE INVOICE — return isMultiple=false when:
+• "logo ₹20k, guidelines ₹15k, revisions ₹5k" → 1 invoice, 3 line items
+• "development and bug fixes" → 1 invoice, 2 line items
+• "40% design, 60% development" → 1 invoice, 2 line items
+• Single client + single time period
 
-HSN/SAC: 998314=software dev, 998312=web design, 998313=IT consulting, 998315=data processing
-Payment terms default: 15 days | "net 30" \u2192 30 | "immediate" \u2192 0
+MONTH RULES:
+1. Specific months listed (e.g. "April, June, August" — skip May, July):
+   → Use EXACTLY those months listed, in that order
+   → count = number of months explicitly named
+   → "skip May and July" means do NOT include May or July
 
-\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
-SECTION 11 \u2014 COPY RULES (intent = "copy")
-\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
+2. "X months" / "for X months" without specific months:
+   → Start from current month ({currentMonth})
+   → count = X consecutive months
 
-- targetInvoiceRef = source invoice number or client name (look in SESSION CONTEXT first, then MEMORY CONTEXT)
-- clientName = the NEW client name
-- Copy ALL line items, GST%, gstType, payment terms exactly from the source
-- Generate fresh invoiceDate = today and invoiceMonth = current month
-- Do NOT inherit invoice number
-- If "same as last one but for Ankit": source = most recent invoice that is NOT Ankit's
+3. "Q1" = January, February, March of the specified or current year
+   "Q2" = April, May, June | "Q3" = July, August, September | "Q4" = October, November, December
 
-\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
-SECTION 12 \u2014 OUTPUT SCHEMA
-\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
+EXAMPLES:
 
-Return exactly these fields:
-{{
-  "intent": "new" | "edit" | "copy",
-  "targetInvoiceRef": "",
-  "clientName": "",
-  "lineItems": [
-    {{
-      "description": "",
-      "quantity": 1,
-      "unit": "item",
-      "rate": 0,
-      "amount": 0,
-      "hsnSacCode": "",
-      "hsnSacType": "SAC"
-    }}
-  ],
-  "gstPercent": 18,
-  "gstType": "CGST_SGST",
-  "discountType": "none",
-  "discountValue": 0,
-  "notes": "",
-  "subtotal": 0,
-  "discountAmount": 0,
-  "taxableAmount": 0,
-  "gstAmount": 0,
-  "cgstAmount": 0,
-  "sgstAmount": 0,
-  "igstAmount": 0,
-  "total": 0,
-  "paymentTermsDays": 15,
-  "invoiceDate": "YYYY-MM-DD",
-  "invoiceMonth": "Month YYYY",
-  "changedFields": [],
-  "warning": ""
-}}
-
-VALIDATION: quantity > 0 | rate >= 0 | amount = quantity \u00d7 rate | gstPercent >= 0 | paymentTermsDays >= 0
-
-\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
-WORKED EXAMPLES
-\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
-
-EXAMPLE A1 \u2014 "with GST" means GST on TOP:
-Prompt: "Invoice Priya for 5 days of Next.js work at \u20b910,000/day with 18% GST"
-\u2192 rate = \u20b910,000 (do NOT divide by 1.18)
-\u2192 lineItems = [{{ description: "Next.js Development", quantity: 5, unit: "day", rate: 10000, amount: 50000 }}]
-\u2192 subtotal = 50000, gstAmount = 9000, total = 59000
-
-EXAMPLE A2 \u2014 "GST included" means back-calculate:
-Prompt: "quick invoice rahul 50k gst included"
-\u2192 subtotal = round(50000/1.18) = 42373
-\u2192 lineItems = [{{ description: "Services", quantity: 1, unit: "item", rate: 42373, amount: 42373 }}]
-\u2192 gstAmount = 7627, total = 50000
-
-EXAMPLE B \u2014 Add line item (NEVER remove existing):
-Session has: Invoice for Rahul with [{{"description":"Logo Design","rate":20000}},{{"description":"Brand Guidelines","rate":15000}}]
-Prompt: "Add brand strategy \u20b910,000 to Rahul's invoice"
-\u2192 changedFields = ["lineItems"]
-\u2192 lineItems = [
-    {{ description: "Logo Design", quantity: 1, unit: "item", rate: 20000, amount: 20000 }},
-    {{ description: "Brand Guidelines", quantity: 1, unit: "item", rate: 15000, amount: 15000 }},
-    {{ description: "Brand Strategy", quantity: 1, unit: "item", rate: 10000, amount: 10000 }}
+Prompt: "Invoice Rahul ₹45,000 for Jan, Feb, March with 18% GST"
+→ isMultiple: true, count: 3
+→ subPrompts: [
+    "Invoice Rahul for services ₹45,000 with 18% GST for January 2026, payment terms 15 days",
+    "Invoice Rahul for services ₹45,000 with 18% GST for February 2026, payment terms 15 days",
+    "Invoice Rahul for services ₹45,000 with 18% GST for March 2026, payment terms 15 days"
   ]
-NEVER return just [{{"description":"Brand Strategy"}}] \u2014 that removes existing items!
 
-EXAMPLE C \u2014 Milestone invoice:
-Prompt: "Invoice Rahul for project milestone 1 of 3, total project \u20b93,00,000"
-\u2192 milestoneAmount = 300000 \u00f7 3 = 100000
-\u2192 lineItems = [{{ description: "Project Milestone 1 of 3", quantity: 1, unit: "milestone", rate: 100000, amount: 100000 }}]
-\u2192 total (with 18% GST) = 118000. NEVER set rate to 300000!
-
-EXAMPLE D \u2014 Percentage split (ONE invoice, TWO line items):
-Prompt: "Invoice Rahul \u20b91,00,000 \u2014 40% design, 60% development"
-\u2192 ONE invoice, NOT a split into multiple invoices
-\u2192 lineItems = [
-    {{ description: "Design", quantity: 1, unit: "item", rate: 40000, amount: 40000 }},
-    {{ description: "Development", quantity: 1, unit: "item", rate: 60000, amount: 60000 }}
+Prompt: "Create monthly invoice for Priya for web maintenance ₹15,000/month for 2 months"
+→ isMultiple: true, count: 2
+→ subPrompts: [
+    "Invoice Priya for web maintenance ₹15,000 with 18% GST for May 2026, payment terms 15 days",
+    "Invoice Priya for web maintenance ₹15,000 with 18% GST for June 2026, payment terms 15 days"
   ]
-\u2192 subtotal = 100000
 
-EXAMPLE E \u2014 Foreign currency conversion:
-Prompt: "Invoice international client $2,000 at current USD/INR rate"
-\u2192 Use the live rate from SECTION 1 above
-\u2192 amount = 2000 \u00d7 (live USD rate) = calculated INR amount
-\u2192 lineItems = [{{ description: "Services", quantity: 1, unit: "item", rate: [converted amount], amount: [converted amount] }}]
+Prompt: "Invoice Priya for April, June, August ₹20,000 each (skip May and July)"
+→ isMultiple: true, count: 3
+→ subPrompts: [
+    "Invoice Priya for services ₹20,000 with 18% GST for April 2026, payment terms 15 days",
+    "Invoice Priya for services ₹20,000 with 18% GST for June 2026, payment terms 15 days",
+    "Invoice Priya for services ₹20,000 with 18% GST for August 2026, payment terms 15 days"
+  ]
 
-EXAMPLE F \u2014 Pro-rata March:
-Prompt: "Invoice Ankit for 15 days of March at \u20b950,000/month"
-\u2192 March has 31 days \u2192 proRata = round(15/31 \u00d7 50000) = 24194
-\u2192 lineItems = [{{ description: "Pro-rata Services (15/31 days in March 2026)", quantity: 15, unit: "day", rate: 1613, amount: 24194 }}]
+Prompt: "Create 3 invoices for Kartik for Q1 2026 ₹30,000 each"
+→ isMultiple: true, count: 3
+→ subPrompts: [
+    "Invoice Kartik for services ₹30,000 with 18% GST for January 2026, payment terms 15 days",
+    "Invoice Kartik for services ₹30,000 with 18% GST for February 2026, payment terms 15 days",
+    "Invoice Kartik for services ₹30,000 with 18% GST for March 2026, payment terms 15 days"
+  ]
 
-Invoice Request: {prompt}`;
+Prompt: "Invoice Rahul for logo design ₹20,000, brand guidelines ₹15,000, 3 revisions ₹5,000"
+→ isMultiple: false, count: 1, subPrompts: []
+
+Original prompt: {prompt}`;

@@ -85,6 +85,7 @@ interface PendingState {
   matchedClient?: ClientAPI | null;
   ambiguityInvoice?: ParsedInvoice;
   ambiguityTargetRef?: string;
+  // Bug 4 fix: store the specific invoice ref the user is copying FROM
   ambiguitySourceRef?: string;
   pendingEmail?: string;
 }
@@ -143,6 +144,10 @@ export function useInvoiceChat() {
   const setActiveTab = (tab: "draft" | "confirmed") => {
     setPanelTab(tab);
   };
+
+  // ─────────────────────────────────────────────
+  // Session / message loading
+  // ─────────────────────────────────────────────
 
   const loadMessagesForSession = useCallback(
     async (userId: string, sessionId: string) => {
@@ -253,6 +258,10 @@ export function useInvoiceChat() {
     return session._id;
   };
 
+  // ─────────────────────────────────────────────
+  // Core helpers
+  // ─────────────────────────────────────────────
+
   const addAIMessage = async (
     content: string,
     sessionId: string
@@ -288,6 +297,10 @@ export function useInvoiceChat() {
     );
   };
 
+  /**
+   * Bug 7 fix: `suppressGenericMessage` skips the "Invoice draft ready for X" message
+   * in multi-invoice flows since the summary message already covers it.
+   */
   const saveDraftAndShow = async (
     invoice: ParsedInvoice,
     client: ClientAPI | null,
@@ -392,6 +405,7 @@ export function useInvoiceChat() {
     message: string,
     sessionId: string
   ) => {
+    // Bug 5: block edits on confirmed invoices
     if (target.status === "confirmed") {
       await addAIMessage(
         `⚠️ **${target.invoice.clientName}**'s invoice (${
@@ -430,6 +444,10 @@ export function useInvoiceChat() {
     setSelectedPanelMessageId(target.messageId);
     await addAIMessage(message, sessionId);
   };
+
+  // ─────────────────────────────────────────────
+  // Handle agent result
+  // ─────────────────────────────────────────────
 
   const handleAgentResult = async (
     result: AgentResult,
@@ -503,10 +521,28 @@ export function useInvoiceChat() {
           await addAIMessage(message, sessionId);
           break;
         }
-        const matches = findMatchingInvoices(
+        let matches = findMatchingInvoices(
           sessionInvoicesRef.current,
           targetRef ?? ""
         );
+        // If no matches by targetRef, fall back to panel-selected or most recent draft
+        if (matches.length === 0) {
+          const drafts = sessionInvoicesRef.current.filter(
+            (s) => s.status !== "confirmed"
+          );
+          if (drafts.length === 1) {
+            matches = drafts;
+          } else if (selectedPanelMessageId) {
+            const panelMatch = sessionInvoicesRef.current.find(
+              (s) =>
+                s.messageId === selectedPanelMessageId &&
+                s.status !== "confirmed"
+            );
+            if (panelMatch) matches = [panelMatch];
+          } else if (drafts.length > 0) {
+            matches = [drafts[drafts.length - 1]]; // most recent draft
+          }
+        }
         if (matches.length === 0) {
           await addAIMessage(message, sessionId);
           break;
@@ -557,6 +593,7 @@ export function useInvoiceChat() {
       }
 
       case "ambiguous": {
+        // Bug 4 fix: store the targetRef so when user replies we can pass it directly to the copy
         setPending({
           status: "awaiting_ambiguity",
           sessionId,
@@ -570,6 +607,7 @@ export function useInvoiceChat() {
       }
 
       case "multi_created": {
+        // Bug 7 fix: show summary ONCE, then create each invoice without "draft ready" messages
         await addAIMessage(message, sessionId);
         const items =
           invoicesWithMatch ??
@@ -592,6 +630,7 @@ export function useInvoiceChat() {
             true // suppress individual "draft ready" messages
           );
 
+          // Bug 1 fix: capture first message ID directly from saveDraftAndShow
           if (!firstBatchMessageId && savedDraft?._msgId) {
             firstBatchMessageId = savedDraft._msgId;
           }
@@ -599,6 +638,9 @@ export function useInvoiceChat() {
           // Warnings are emitted directly inside saveDraftAndShow
         }
 
+        // Bug 1 fix: select the FIRST invoice of the batch (= current/earliest month).
+        // Use firstBatchMessageId captured directly from saveDraftAndShow — reliable
+        // because it comes from savedMsg._id, not from async state.
         if (firstBatchMessageId && currentSessionIdRef.current === sessionId) {
           setSelectedPanelMessageId(firstBatchMessageId);
         } else if (currentSessionIdRef.current === sessionId) {
@@ -619,6 +661,10 @@ export function useInvoiceChat() {
         break;
     }
   };
+
+  // ─────────────────────────────────────────────
+  // Pending state replies
+  // ─────────────────────────────────────────────
 
   const handlePendingReply = async (reply: string, sessionId: string) => {
     const current = pendingStateRef.current;
@@ -726,6 +772,8 @@ export function useInvoiceChat() {
       return;
     }
 
+    // Bug 2 fix: copy ambiguity — user replied with the specific invoice number.
+    // Find it DIRECTLY in session invoices (no LLM re-call) to avoid re-triggering ambiguity.
     if (current.status === "awaiting_ambiguity") {
       setPending(null);
       const specificRef = reply.trim().toUpperCase();
@@ -789,19 +837,26 @@ export function useInvoiceChat() {
         }),
       };
 
-      await addAIMessage(
-        `Copied **${specificRef}** for **${destClient}**! Total: **₹${copiedInvoice.total.toLocaleString(
-          "en-IN"
-        )}** — review it in the side panel.`,
-        sessionId
+      // Issue 5 fix: run client match for the destination client so new clients
+      // go through the needs_client flow (email collection) just like normal copies do.
+      const sessionCtxForCopy = buildSessionContext(sessionInvoicesRef.current);
+      const copyAgentResult = await parseInvoiceWithAI(
+        `Copy invoice ${specificRef} for client named ${destClient}`,
+        user.id,
+        sessionCtxForCopy,
+        undefined,
+        null
       );
-      await saveDraftAndShow(
-        copiedInvoice,
-        null,
+
+      // Use the copied invoice data (correct fields) but the agent's matchResult for client lookup
+      const resultWithCopiedInvoice = {
+        ...copyAgentResult,
+        invoice: copiedInvoice,
+      };
+      await handleAgentResult(
+        resultWithCopiedInvoice,
         sessionId,
-        current.originalPrompt,
-        true,
-        true
+        current.originalPrompt
       );
       return;
     }
@@ -842,6 +897,10 @@ export function useInvoiceChat() {
       return;
     }
   };
+
+  // ─────────────────────────────────────────────
+  // Main send handler
+  // ─────────────────────────────────────────────
 
   const handleSend = async (prompt: string) => {
     if (!user) return;
@@ -914,31 +973,91 @@ export function useInvoiceChat() {
         }
       }
 
+      // Bug 3 fix (edit): when the prompt is an edit, pass the invoice for the
+      // SPECIFIC client/invoice mentioned — not just the selected panel invoice.
+      // This prevents edits to INV-X from accidentally picking up a different client's invoice.
       const looksLikeEdit = isEditIntent(prompt);
       let currentInvoice: ParsedInvoice | null = null;
 
       if (looksLikeEdit) {
-        // Extract invoice number from prompt first (e.g. "Add GST to INV-2026-047")
-        // Then fall back to client name match, then selected panel invoice.
-        const invNumInPrompt = prompt.match(/INV-\d{4}-\d{3,}/i)?.[0] ?? "";
-        const searchRef = invNumInPrompt || "";
-        const mentionedMatches = searchRef
-          ? findMatchingInvoices(sessionInvoicesRef.current, searchRef)
-          : [];
-        if (mentionedMatches.length === 1) {
-          // Exact match by invoice number in prompt
-          currentInvoice = mentionedMatches[0].invoice;
-        } else if (selectedPanelMessageId) {
-          // Fall back to currently selected panel invoice
+        const promptLower = prompt.toLowerCase();
+        const sessions = sessionInvoicesRef.current;
+
+        // 1. Explicit invoice number (e.g. "Add GST to INV-2026-047")
+        const invNumMatch = prompt.match(/INV-[0-9]{4}-[0-9]{3,}/i);
+        const invNumInPrompt = invNumMatch ? invNumMatch[0] : "";
+        if (invNumInPrompt) {
+          const m = findMatchingInvoices(sessions, invNumInPrompt);
+          if (m.length >= 1) currentInvoice = m[m.length - 1].invoice;
+        }
+
+        // 2. "last invoice" → most recent session invoice (not selectedPanel which may be stale)
+        if (
+          !currentInvoice &&
+          (promptLower.includes("last invoice") ||
+            promptLower.includes("in last invoice") ||
+            promptLower.includes("previous invoice") ||
+            promptLower.includes("latest invoice"))
+        ) {
+          if (sessions.length > 0)
+            currentInvoice = sessions[sessions.length - 1].invoice;
+        }
+
+        // 3. Named client (e.g. "Add GST to Priya's invoice")
+        if (!currentInvoice) {
+          const clientRefArr = prompt.match(
+            /(?:to|in|for|on)\s+([A-Z][a-z]+)(?:'s)?\s+invoice/i
+          );
+          const clientRef = clientRefArr ? clientRefArr[1] : "";
+          if (clientRef) {
+            const m = findMatchingInvoices(sessions, clientRef);
+            if (m.length > 0) currentInvoice = m[m.length - 1].invoice;
+          }
+        }
+
+        // 4. Selected panel invoice
+        if (!currentInvoice && selectedPanelMessageId) {
           currentInvoice =
-            sessionInvoicesRef.current.find(
-              (s) => s.messageId === selectedPanelMessageId
-            )?.invoice ?? null;
-        } else if (sessionInvoicesRef.current.length > 0) {
-          // Fall back to most recent invoice
-          currentInvoice =
-            sessionInvoicesRef.current[sessionInvoicesRef.current.length - 1]
-              .invoice ?? null;
+            sessions.find((s) => s.messageId === selectedPanelMessageId)
+              ?.invoice ?? null;
+        }
+
+        // 5. Most recent session invoice as last resort
+        if (!currentInvoice && sessions.length > 0) {
+          currentInvoice = sessions[sessions.length - 1].invoice;
+        }
+      }
+
+      // For split intents: find which session invoice to split by client name / invoice number
+      let splitInvoice: ParsedInvoice | null = null;
+      const promptLower2 = prompt.toLowerCase();
+      if (
+        promptLower2.includes("split") ||
+        promptLower2.includes("divide") ||
+        promptLower2.includes("equal part")
+      ) {
+        const sessions2 = sessionInvoicesRef.current;
+        const invNumArr = prompt.match(/INV-[0-9]{4}-[0-9]{3,}/i);
+        if (invNumArr) {
+          const m = findMatchingInvoices(sessions2, invNumArr[0]);
+          if (m.length > 0) splitInvoice = m[0].invoice;
+        }
+        if (!splitInvoice) {
+          const cArr = prompt.match(
+            /([A-Z][a-z]+)(?:'s)? (?:[^\s]+ )?invoice/i
+          );
+          if (cArr) {
+            const m = findMatchingInvoices(sessions2, cArr[1]);
+            if (m.length > 0) splitInvoice = m[m.length - 1].invoice;
+          }
+        }
+        if (!splitInvoice && selectedPanelMessageId) {
+          splitInvoice =
+            sessions2.find((s) => s.messageId === selectedPanelMessageId)
+              ?.invoice ?? null;
+        }
+        if (!splitInvoice && sessions2.length > 0) {
+          splitInvoice = sessions2[sessions2.length - 1].invoice;
         }
       }
 
@@ -947,7 +1066,7 @@ export function useInvoiceChat() {
         user.id,
         sessionContext,
         memoryContext,
-        currentInvoice
+        splitInvoice ?? currentInvoice
       );
       await handleAgentResult(result, sessionId, prompt);
       loadSessions();
@@ -967,6 +1086,10 @@ export function useInvoiceChat() {
       setLoadingSessionId(null);
     }
   };
+
+  // ─────────────────────────────────────────────
+  // Panel actions
+  // ─────────────────────────────────────────────
 
   const handleConfirmFromPanel = async (messageId: string) => {
     if (!user || !currentSessionId) return;

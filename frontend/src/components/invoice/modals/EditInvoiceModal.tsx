@@ -21,6 +21,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import { toast } from "sonner";
 
 export interface EditInvoiceData {
   _id: string;
@@ -463,9 +464,11 @@ export function EditInvoiceModal({
     setSaving(true);
     try {
       await onSave(invoice._id, form);
+      toast.success("Invoice updated successfully!");
       onClose();
     } catch (err) {
       console.error("Save failed:", err);
+      toast.error("Failed to update invoice");
     } finally {
       setSaving(false);
     }

@@ -31,12 +31,12 @@ import {
   CommandInput,
   CommandItem,
 } from "@/components/ui/command";
-
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { toast } from "sonner";
 
 const emptyProfile: UserProfile = {
   businessName: "",
@@ -162,9 +162,11 @@ export function ProfilePage() {
     });
     if (result) {
       setSaveState("saved");
+      toast.success("Profile saved successfully!");
       setTimeout(() => setSaveState("idle"), 3000);
     } else {
       setSaveState("idle");
+      toast.error("Failed to save profile");
     }
   };
 

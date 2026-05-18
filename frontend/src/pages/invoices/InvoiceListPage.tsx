@@ -13,9 +13,11 @@ import {
   Send,
   Trash2,
   Edit2,
+  CheckCircle,
 } from "lucide-react";
 import { downloadInvoicePDF } from "@/lib/downloadPDF";
 import {
+  confirmInvoice,
   deleteInvoice,
   getUserInvoices,
   updateInvoice,
@@ -32,6 +34,7 @@ import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { SendInvoiceModal } from "@/components/invoice/modals/SendInvoiceModel";
 import { getClientByName } from "@/lib/api/clientApi";
+import { toast } from "sonner";
 
 type InvoiceStatus = "draft" | "confirmed" | "sent" | "paid" | "overdue";
 type FilterTab = "all" | "draft" | "confirmed" | "sent" | "paid" | "overdue";
@@ -40,8 +43,8 @@ interface Invoice {
   _id: string;
   invoiceNumber: string;
   clientName: string;
-  lineItems?: LineItem[];
-  paymentTermsDays?: number;
+  lineItems: LineItem[];
+  paymentTermsDays: number;
   gstPercent: number;
   gstType?: "IGST" | "CGST_SGST";
   cgstAmount?: number;
@@ -87,16 +90,10 @@ function getInvoicePermissions(status: InvoiceStatus) {
         canEdit: true,
         canSend: false,
         canDelete: true,
-        reason: "Draft must be confirmed before sending or editing",
+        reason: "Draft must be confirmed before sending",
       };
-
     case "confirmed":
-      return {
-        canEdit: true,
-        canSend: true,
-        canDelete: true,
-      };
-
+      return { canEdit: true, canSend: true, canDelete: true };
     case "sent":
       return {
         canEdit: false,
@@ -104,7 +101,6 @@ function getInvoicePermissions(status: InvoiceStatus) {
         canDelete: false,
         reason: "Invoice already sent",
       };
-
     case "paid":
       return {
         canEdit: false,
@@ -112,7 +108,6 @@ function getInvoicePermissions(status: InvoiceStatus) {
         canDelete: false,
         reason: "Paid invoices are locked",
       };
-
     case "overdue":
       return {
         canEdit: false,
@@ -161,11 +156,12 @@ function getAvatarColor(name: string) {
   return AVATAR_COLORS[name.charCodeAt(0) % AVATAR_COLORS.length];
 }
 
-// ── Filter logic ──
 function matchesTab(inv: Invoice, tab: FilterTab): boolean {
   if (tab === "all") return true;
   return inv.status === tab;
 }
+
+const COL_WIDTHS = "grid-cols-[160px_1fr_120px_120px_120px_110px_48px]";
 
 export function InvoiceListPage() {
   const navigate = useNavigate();
@@ -176,6 +172,8 @@ export function InvoiceListPage() {
   const [activeTab, setActiveTab] = useState<FilterTab>("all");
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const buttonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const [menuFlip, setMenuFlip] = useState<Record<string, boolean>>({});
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(
     null
@@ -215,7 +213,6 @@ export function InvoiceListPage() {
     return matchTab && matchSearch;
   });
 
-  // Tab counts
   const tabCounts = {
     all: invoices.length,
     draft: invoices.filter((i) => i.status === "draft").length,
@@ -231,8 +228,8 @@ export function InvoiceListPage() {
       await downloadInvoicePDF(
         {
           clientName: inv.clientName,
-          lineItems: inv.lineItems || [],
-          paymentTermsDays: inv.paymentTermsDays || 15,
+          lineItems: inv.lineItems,
+          paymentTermsDays: inv.paymentTermsDays,
           gstPercent: inv.gstPercent,
           gstType: inv.gstType,
           cgstAmount: inv.cgstAmount,
@@ -268,18 +265,39 @@ export function InvoiceListPage() {
     }
   };
 
+  const handleConfirmInvoice = async (inv: Invoice) => {
+    setOpenMenuId(null);
+    try {
+      const confirmed = await confirmInvoice(inv._id);
+      setInvoices((prev) =>
+        prev.map((i) =>
+          i._id === inv._id
+            ? {
+                ...i,
+                status: "confirmed",
+                invoiceNumber: confirmed.invoiceNumber,
+              }
+            : i
+        )
+      );
+      toast.success("Invoice confirmed successfully!");
+    } catch (err) {
+      console.error("Failed to confirm invoice:", err);
+      toast.error("Failed to confirm invoice");
+    }
+  };
+
   const handleSaveEdit = async (id: string, data: Partial<EditInvoiceData>) => {
     await updateInvoice(id, data);
     setInvoices((prev) =>
       prev.map((inv) => (inv._id === id ? { ...inv, ...data } : inv))
     );
   };
+
   const handleOpenEditModal = async (inv: Invoice, e: React.MouseEvent) => {
     e.stopPropagation();
     setOpenMenuId(null);
-
     let invoiceWithClient: Invoice = { ...inv };
-
     if (inv.clientName && user) {
       try {
         const client = await getClientByName(user.id, inv.clientName);
@@ -297,14 +315,23 @@ export function InvoiceListPage() {
         console.error("Failed to fetch client:", err);
       }
     }
-
     setEditingInvoice(invoiceWithClient);
   };
 
+  const HEADERS = [
+    "Invoice",
+    "Client",
+    "Date",
+    "Due Date",
+    "Amount",
+    "Status",
+    "",
+  ];
+
   return (
-    <div className="min-h-screen bg-[#F9FAFB]">
+    <div className="h-screen bg-[#F9FAFB] flex flex-col overflow-hidden">
       {/* Navbar */}
-      <header className="bg-white border-b border-gray-100 px-6 py-4">
+      <header className="bg-white border-b border-gray-100 px-6 py-4 flex-shrink-0">
         <div className="max-w-6xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
             <Button
@@ -331,9 +358,9 @@ export function InvoiceListPage() {
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto px-6 py-8">
+      <main className="max-w-6xl mx-auto px-6 py-8 w-full flex flex-col flex-1 min-h-0 overflow-hidden">
         {/* Page header */}
-        <div className="flex items-center justify-between mb-8">
+        <div className="flex items-center justify-between mb-8 flex-shrink-0">
           <div>
             <h1 className="text-2xl font-bold text-gray-900 tracking-tight">
               All Invoices
@@ -357,7 +384,7 @@ export function InvoiceListPage() {
         </div>
 
         {/* Search + Tabs */}
-        <div className="flex items-center gap-6 mb-6">
+        <div className="flex items-center gap-6 mb-6 flex-shrink-0">
           <div className="relative flex-1 max-w-md">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
             <Input
@@ -367,7 +394,6 @@ export function InvoiceListPage() {
               className="pl-10 rounded-xl focus-visible:ring-indigo-400"
             />
           </div>
-
           <div className="flex items-center gap-1">
             {TABS.map((tab) => (
               <Button
@@ -398,8 +424,8 @@ export function InvoiceListPage() {
           </div>
         </div>
 
-        {/* Table */}
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-soft">
+        {/* Table container — sticky header + scrollable body */}
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm flex flex-col flex-1 min-h-0 overflow-hidden">
           {loading ? (
             <div className="flex items-center justify-center py-20">
               <div className="w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
@@ -419,43 +445,41 @@ export function InvoiceListPage() {
               </p>
             </div>
           ) : (
-            <table className="w-full">
-              <thead>
-                <tr className="border-b border-gray-100">
-                  {[
-                    "Invoice",
-                    "Client",
-                    "Date",
-                    "Due Date",
-                    "Amount",
-                    "Status",
-                    "",
-                  ].map((h, i) => (
-                    <th
-                      key={i}
-                      className="text-left px-6 py-4 text-xs font-semibold text-gray-400 uppercase tracking-wide"
-                    >
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50">
+            <div className="flex flex-col flex-1 min-h-0">
+              {/* ── Sticky header ── */}
+              <div
+                className={`grid ${COL_WIDTHS} border-b border-gray-100 flex-shrink-0`}
+              >
+                {HEADERS.map((h, i) => (
+                  <div
+                    key={i}
+                    className="px-6 py-4 text-left text-xs font-semibold text-gray-400 uppercase tracking-wide"
+                  >
+                    {h}
+                  </div>
+                ))}
+              </div>
+
+              {/* ── Scrollable body ── */}
+              <div className="overflow-y-auto flex-1">
                 {filtered.map((inv) => {
                   const display = getDisplayStatus(inv);
                   const perms = getInvoicePermissions(inv.status);
                   return (
-                    <tr
+                    <div
                       key={inv._id}
                       onClick={() => navigate(`/invoices/${inv._id}`)}
-                      className="hover:bg-gray-50 transition-colors cursor-pointer"
+                      className={`grid ${COL_WIDTHS} border-b border-gray-50 last:border-b-0 hover:bg-gray-50 transition-colors cursor-pointer items-center`}
                     >
-                      <td className="px-6 py-4">
+                      {/* Invoice number */}
+                      <div className="px-6 py-4">
                         <span className="text-sm font-semibold text-gray-900">
                           {inv.invoiceNumber}
                         </span>
-                      </td>
-                      <td className="px-6 py-4">
+                      </div>
+
+                      {/* Client */}
+                      <div className="px-6 py-4">
                         <div className="flex items-center gap-3">
                           <Avatar
                             className={`w-8 h-8 flex-shrink-0 ${getAvatarColor(
@@ -470,50 +494,77 @@ export function InvoiceListPage() {
                               {inv.clientName.charAt(0).toUpperCase()}
                             </AvatarFallback>
                           </Avatar>
-                          <div>
-                            <p className="text-sm font-medium text-gray-900">
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium text-gray-900 truncate">
                               {inv.clientName}
                             </p>
-                            <p className="text-xs text-gray-400">
+                            <p className="text-xs text-gray-400 truncate">
                               {inv.lineItems && inv.lineItems.length > 0
                                 ? inv.lineItems[0].description
                                 : "—"}
                             </p>
                           </div>
                         </div>
-                      </td>
-                      <td className="px-6 py-4">
+                      </div>
+
+                      {/* Date */}
+                      <div className="px-6 py-4">
                         <span className="text-sm text-gray-500">
                           {formatDate(inv.createdAt)}
                         </span>
-                      </td>
-                      <td className="px-6 py-4">
+                      </div>
+
+                      {/* Due date */}
+                      <div className="px-6 py-4">
                         <span className="text-sm text-gray-500">
                           {inv.dueDate ? formatDate(inv.dueDate) : "—"}
                         </span>
-                      </td>
-                      <td className="px-6 py-4">
+                      </div>
+
+                      {/* Amount */}
+                      <div className="px-6 py-4">
                         <span className="text-sm font-semibold text-gray-900">
                           {formatINR(inv.total)}
                         </span>
-                      </td>
-                      <td className="px-6 py-4">
+                      </div>
+
+                      {/* Status */}
+                      <div className="px-6 py-4">
                         <Badge
                           className={`capitalize rounded-full text-xs font-medium ${display.style}`}
                         >
                           {display.label}
                         </Badge>
-                      </td>
-                      <td className="px-6 py-4">
+                      </div>
+
+                      {/* Actions menu */}
+                      <div className="px-3 py-4">
                         <div className="relative">
                           <Button
                             variant="ghost"
                             size="icon"
+                            ref={(el) => {
+                              buttonRefs.current[inv._id] =
+                                el as HTMLButtonElement;
+                            }}
                             onClick={(e) => {
                               e.stopPropagation();
-                              setOpenMenuId(
-                                openMenuId === inv._id ? null : inv._id
-                              );
+                              const id = inv._id;
+                              if (openMenuId === id) {
+                                setOpenMenuId(null);
+                              } else {
+                                const btn = buttonRefs.current[id];
+                                if (btn) {
+                                  const rect = btn.getBoundingClientRect();
+                                  const spaceBelow =
+                                    window.innerHeight - rect.bottom;
+                                  setMenuFlip((prev) => ({
+                                    ...prev,
+                                    [id]: spaceBelow < 220,
+                                  }));
+                                }
+                                setOpenMenuId(id);
+                              }
                             }}
                             className="w-8 h-8 rounded-lg text-gray-400 hover:text-gray-600"
                           >
@@ -523,7 +574,9 @@ export function InvoiceListPage() {
                           {openMenuId === inv._id && (
                             <div
                               ref={menuRef}
-                              className="absolute right-0 top-8 z-50 bg-white rounded-2xl border border-gray-100 py-1.5 w-44"
+                              className={`absolute right-0 z-50 bg-white rounded-2xl border border-gray-100 py-1.5 w-44 ${
+                                menuFlip[inv._id] ? "bottom-8" : "top-8"
+                              }`}
                               style={{
                                 boxShadow:
                                   "0 8px 32px rgba(0,0,0,0.12), 0 2px 8px rgba(0,0,0,0.06)",
@@ -537,9 +590,10 @@ export function InvoiceListPage() {
                                 }}
                                 className="w-full justify-start gap-3 px-4 py-2.5 h-auto rounded-none text-sm text-gray-700"
                               >
-                                <Eye className="w-4 h-4 text-gray-400" />
+                                <Eye className="w-4 h-4 text-gray-700" />
                                 View
                               </Button>
+
                               <Button
                                 variant="ghost"
                                 onClick={(e) => {
@@ -548,9 +602,22 @@ export function InvoiceListPage() {
                                 }}
                                 className="w-full justify-start gap-3 px-4 py-2.5 h-auto rounded-none text-sm text-gray-700"
                               >
-                                <Download className="w-4 h-4 text-gray-400" />
+                                <Download className="w-4 h-4 text-gray-700" />
                                 Download PDF
                               </Button>
+
+                              {inv.status === "draft" && (
+                                <div onClick={(e) => e.stopPropagation()}>
+                                  <Button
+                                    variant="ghost"
+                                    onClick={() => handleConfirmInvoice(inv)}
+                                    className="w-full justify-start gap-3 px-4 py-2.5 h-auto rounded-none text-sm text-gray-700"
+                                  >
+                                    <CheckCircle className="w-4 h-4 text-gray-700" />
+                                    Confirm Invoice
+                                  </Button>
+                                </div>
+                              )}
 
                               <div onClick={(e) => e.stopPropagation()}>
                                 <Button
@@ -596,6 +663,7 @@ export function InvoiceListPage() {
                                   Send
                                 </Button>
                               </div>
+
                               <div onClick={(e) => e.stopPropagation()}>
                                 <Button
                                   variant="ghost"
@@ -622,12 +690,12 @@ export function InvoiceListPage() {
                             </div>
                           )}
                         </div>
-                      </td>
-                    </tr>
+                      </div>
+                    </div>
                   );
                 })}
-              </tbody>
-            </table>
+              </div>
+            </div>
           )}
         </div>
       </main>
@@ -646,6 +714,7 @@ export function InvoiceListPage() {
           invoiceNumber={sendingInvoice.invoiceNumber}
           clientName={sendingInvoice.clientName}
           total={sendingInvoice.total}
+          invoice={sendingInvoice}
           onClose={() => setSendingInvoice(null)}
           onSent={() => {
             setInvoices((prev) =>

@@ -674,12 +674,17 @@ export function InvoiceViewPage() {
         </div>
       </main>
 
-      {showSendModal && (
+      {showSendModal && invoice && (
         <SendInvoiceModal
           invoiceId={invoice._id}
           invoiceNumber={invoice.invoiceNumber}
           clientName={invoice.clientName}
           total={invoice.total}
+          invoice={{
+            ...invoice,
+            lineItems: invoice.lineItems ?? [],
+            paymentTermsDays: invoice.paymentTermsDays ?? 15,
+          }}
           onClose={() => setShowSendModal(false)}
           onSent={() => {
             setInvoice((prev) =>

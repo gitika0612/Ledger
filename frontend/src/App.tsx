@@ -8,6 +8,7 @@ import { InvoiceListPage } from "./pages/invoices/InvoiceListPage";
 import { InvoiceViewPage } from "./pages/invoices/InvoiceViewPage";
 import { ProfilePage } from "./pages/ProfilePage";
 import { OnboardingPage } from "./pages/OnboardingPage";
+import { Toaster } from "sonner";
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => (
   <>
@@ -20,59 +21,62 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => (
 
 export default function App() {
   return (
-    <Routes>
-      <Route path="/" element={<Navigate to="/sign-in" replace />} />
-      <Route path="/sign-in/*" element={<SignInPage />} />
-      <Route path="/sign-up/*" element={<SignUpPage />} />
+    <>
+      <Toaster richColors position="top-right" />
+      <Routes>
+        <Route path="/" element={<Navigate to="/sign-in" replace />} />
+        <Route path="/sign-in/*" element={<SignInPage />} />
+        <Route path="/sign-up/*" element={<SignUpPage />} />
 
-      <Route
-        path="/onboarding"
-        element={
-          <ProtectedRoute>
-            <OnboardingPage />
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/dashboard"
-        element={
-          <ProtectedRoute>
-            <DashboardPage />
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/create"
-        element={
-          <ProtectedRoute>
-            <CreateInvoicePage />
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/invoices"
-        element={
-          <ProtectedRoute>
-            <InvoiceListPage />
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/invoices/:id"
-        element={
-          <ProtectedRoute>
-            <InvoiceViewPage />
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/profile"
-        element={
-          <ProtectedRoute>
-            <ProfilePage />
-          </ProtectedRoute>
-        }
-      />
-    </Routes>
+        <Route
+          path="/onboarding"
+          element={
+            <ProtectedRoute>
+              <OnboardingPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/dashboard"
+          element={
+            <ProtectedRoute>
+              <DashboardPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/create"
+          element={
+            <ProtectedRoute>
+              <CreateInvoicePage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/invoices"
+          element={
+            <ProtectedRoute>
+              <InvoiceListPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/invoices/:id"
+          element={
+            <ProtectedRoute>
+              <InvoiceViewPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/profile"
+          element={
+            <ProtectedRoute>
+              <ProfilePage />
+            </ProtectedRoute>
+          }
+        />
+      </Routes>
+    </>
   );
 }

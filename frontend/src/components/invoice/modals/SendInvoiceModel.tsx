@@ -1,14 +1,15 @@
 import { useState, useEffect } from "react";
 import {
   Mail,
-  Building2,
-  MapPin,
   Loader2,
   Send,
   CheckCircle2,
   X,
+  AlertTriangle,
+  ArrowRight,
 } from "lucide-react";
 import { useUser } from "@clerk/clerk-react";
+import { useNavigate } from "react-router-dom";
 import {
   Dialog,
   DialogContent,
@@ -21,7 +22,39 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
-import { getClientByName, upsertClient, ClientAPI } from "@/lib/api/clientApi";
+import { getClientByName } from "@/lib/api/clientApi";
+import { useAuth } from "@/hooks/useAuth";
+import { generateInvoicePDFBase64 } from "@/lib/downloadPDF";
+import {
+  ParsedInvoice,
+  LineItem,
+} from "@/components/invoice/InvoicePreviewCard";
+
+// Invoice shape needed for PDF generation — looser than ParsedInvoice
+// so both InvoiceListPage and InvoiceViewPage can pass their local Invoice type
+interface InvoiceForPDF {
+  clientName: string;
+  lineItems: LineItem[];
+  paymentTermsDays: number;
+  gstPercent: number;
+  gstType?: "IGST" | "CGST_SGST";
+  cgstPercent?: number;
+  sgstPercent?: number;
+  igstPercent?: number;
+  cgstAmount?: number;
+  sgstAmount?: number;
+  igstAmount?: number;
+  gstAmount: number;
+  discountType?: "percent" | "amount" | "none";
+  discountValue?: number;
+  discountAmount?: number;
+  taxableAmount?: number;
+  notes?: string;
+  subtotal: number;
+  total: number;
+  invoiceDate?: string;
+  invoiceMonth?: string;
+}
 import api from "@/lib/api/api";
 
 interface SendInvoiceModalProps {
@@ -29,31 +62,18 @@ interface SendInvoiceModalProps {
   invoiceNumber: string;
   clientName: string;
   total: number;
+  invoice: InvoiceForPDF; // needed for PDF generation
   onClose: () => void;
-  onSent: (clientEmail: string) => void;
+  onSent: () => void;
 }
 
-interface ClientForm {
-  email: string;
-  phone: string;
-  address: string;
-  city: string;
-  state: string;
-  pincode: string;
-  gstin: string;
-}
-
-const emptyForm: ClientForm = {
-  email: "",
-  phone: "",
-  address: "",
-  city: "",
-  state: "",
-  pincode: "",
-  gstin: "",
-};
-
-type Step = "details" | "confirm" | "sent";
+type ModalState =
+  | "loading" // fetching profile + client
+  | "no_profile" // user hasn't set up company name
+  | "no_email" // client has no email on file
+  | "ready" // all good — show summary + send
+  | "sending" // PDF generating + email sending
+  | "sent"; // success
 
 function formatINR(amount: number) {
   return new Intl.NumberFormat("en-IN", {
@@ -63,98 +83,122 @@ function formatINR(amount: number) {
   }).format(amount);
 }
 
+function isValidEmail(email: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email.trim());
+}
+
 export function SendInvoiceModal({
   invoiceId,
   invoiceNumber,
   clientName,
   total,
+  invoice,
   onClose,
   onSent,
 }: SendInvoiceModalProps) {
   const { user } = useUser();
-  const [step, setStep] = useState<Step>("details");
-  const [form, setForm] = useState<ClientForm>(emptyForm);
-  const [loadingClient, setLoadingClient] = useState(true);
-  const [existingClient, setExistingClient] = useState<ClientAPI | null>(null);
-  const [sending, setSending] = useState(false);
+  const { getUserProfile } = useAuth();
+  const navigate = useNavigate();
 
-  // Auto-fill if client exists
+  const [modalState, setModalState] = useState<ModalState>("loading");
+  const [clientEmail, setClientEmail] = useState("");
+  const [typedEmail, setTypedEmail] = useState(""); // for no_email state
+  const [fromName, setFromName] = useState("");
+  const [sendError, setSendError] = useState("");
+  const [emailError, setEmailError] = useState("");
+
+  // On open: fetch profile + client in parallel
   useEffect(() => {
-    if (!user || !clientName) return;
-
-    (async () => {
-      try {
-        const client = await getClientByName(user.id, clientName);
-        if (client) {
-          setExistingClient(client);
-          setForm({
-            email: client.email || "",
-            phone: client.phone || "",
-            address: client.address || "",
-            city: client.city || "",
-            state: client.state || "",
-            pincode: client.pincode || "",
-            gstin: client.gstin || "",
-          });
-        }
-      } catch (err) {
-        console.error("Failed to fetch client:", err);
-      } finally {
-        setLoadingClient(false);
-      }
-    })();
-  }, [user, clientName]);
-
-  const handleChange = (field: keyof ClientForm, value: string) => {
-    setForm((prev) => ({ ...prev, [field]: value }));
-  };
-
-  const handleContinue = () => {
-    if (!form.email.trim()) return;
-    setStep("confirm");
-  };
-
-  const handleSend = async () => {
     if (!user) return;
-    setSending(true);
+
+    let cancelled = false;
+
+    const load = async () => {
+      try {
+        const [profile, client] = await Promise.all([
+          getUserProfile(),
+          getClientByName(user.id, clientName).catch(() => null),
+        ]);
+
+        if (cancelled) return;
+
+        const businessName = profile?.businessName?.trim() || "";
+        if (!businessName) {
+          setModalState("no_profile");
+          return;
+        }
+        setFromName(businessName);
+
+        const email = client?.email?.trim() || "";
+        if (!email) {
+          setModalState("no_email");
+          return;
+        }
+
+        setClientEmail(email);
+        setModalState("ready");
+      } catch (err) {
+        if (!cancelled) {
+          console.error("Failed to load send data:", err);
+          setModalState("no_email");
+        }
+      }
+    };
+
+    load();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, clientName]);
+
+  const handleSend = async (emailToUse: string) => {
+    if (!user || !emailToUse.trim()) return;
+    setSendError("");
+    setModalState("sending");
 
     try {
-      // 1. Save/update client
-      await upsertClient(user.id, {
-        name: clientName,
-        email: form.email.trim(),
-        phone: form.phone,
-        address: form.address,
-        city: form.city,
-        state: form.state,
-        pincode: form.pincode,
-        gstin: form.gstin,
-      });
+      // Step 1: Generate PDF as base64
+      const profile = await getUserProfile();
+      const pdfBase64 = await generateInvoicePDFBase64(
+        invoice as ParsedInvoice,
+        invoiceNumber,
+        user.fullName || user.firstName || "Ledger User",
+        profile
+      );
 
-      // 2. Update invoice status to sent + link client
-      await api.put(`/invoices/${invoiceId}`, {
-        status: "sent",
-        clientEmail: form.email.trim(),
-      });
+      // Step 2: POST to backend — sends email + updates status
+      await api.post(
+        `/invoices/${invoiceId}/send`,
+        { pdfBase64, clientEmail: emailToUse.trim() },
+        { headers: { "x-clerk-id": user.id } }
+      );
 
-      // 3. Move to sent step
-      setStep("sent");
-      onSent(form.email.trim());
+      setClientEmail(emailToUse.trim());
+      setModalState("sent");
+      onSent();
     } catch (err) {
-      console.error("Failed to send invoice:", err);
-    } finally {
-      setSending(false);
+      console.error("Send failed:", err);
+      const msg =
+        err instanceof Error
+          ? err.message
+          : "Failed to send invoice. Please try again.";
+      setSendError(msg);
+      setModalState(clientEmail ? "ready" : "no_email");
     }
   };
 
+  const canClose = modalState !== "sending";
+
   return (
-    <Dialog open={true} onOpenChange={(open) => !open && !sending && onClose()}>
+    <Dialog open onOpenChange={(open) => !open && canClose && onClose()}>
       <DialogContent className="max-w-md p-0 gap-0 rounded-2xl overflow-hidden [&>button]:hidden">
-        {/* Header */}
+        {/* ── Header ── */}
         <DialogHeader className="px-6 py-5 border-b border-gray-100 space-y-0">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-xl bg-indigo-50 flex items-center justify-center">
+              <div className="w-9 h-9 rounded-xl bg-indigo-50 flex items-center justify-center flex-shrink-0">
                 <Send className="w-4 h-4 text-indigo-600" />
               </div>
               <div>
@@ -170,7 +214,7 @@ export function SendInvoiceModal({
               variant="ghost"
               size="icon"
               onClick={onClose}
-              disabled={sending}
+              disabled={!canClose}
               className="w-8 h-8 text-gray-400 hover:text-gray-600"
             >
               <X className="w-4 h-4" />
@@ -178,140 +222,39 @@ export function SendInvoiceModal({
           </div>
         </DialogHeader>
 
-        {/* ── Step: Details ── */}
-        {step === "details" && (
-          <div className="px-6 py-5 space-y-5">
-            {/* Client name — read only */}
-            <div className="flex items-center gap-3 bg-gray-50 rounded-xl px-4 py-3">
-              <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold text-sm flex-shrink-0">
-                {clientName.charAt(0).toUpperCase()}
+        {/* ── Loading ── */}
+        {modalState === "loading" && (
+          <div className="flex items-center justify-center py-16">
+            <Loader2 className="w-6 h-6 animate-spin text-indigo-500" />
+          </div>
+        )}
+
+        {/* ── No Profile ── */}
+        {modalState === "no_profile" && (
+          <div className="px-6 py-8 space-y-5">
+            <div className="flex flex-col items-center text-center space-y-3">
+              <div className="w-14 h-14 rounded-2xl bg-amber-50 border border-amber-100 flex items-center justify-center">
+                <AlertTriangle className="w-7 h-7 text-amber-500" />
               </div>
               <div>
-                <p className="text-sm font-semibold text-gray-900">
-                  {clientName}
+                <p className="text-base font-bold text-gray-900">
+                  Company profile not set up
                 </p>
-                {existingClient && (
-                  <Badge className="text-xs text-emerald-600 bg-emerald-50 border-emerald-100 rounded-full px-2 py-0 font-normal mt-0.5">
-                    Returning client
-                  </Badge>
-                )}
+                <p className="text-sm text-gray-400 mt-1 leading-relaxed">
+                  Your company name appears as the sender on the invoice email.
+                  Add it in Profile Settings before sending.
+                </p>
               </div>
             </div>
 
-            {loadingClient ? (
-              <div className="flex items-center justify-center py-6">
-                <Loader2 className="w-5 h-5 animate-spin text-indigo-500" />
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {/* Email — required */}
-                <div className="space-y-1.5">
-                  <Label className="text-xs font-semibold text-gray-500 flex items-center gap-1">
-                    <Mail className="w-3 h-3" />
-                    Client Email *
-                  </Label>
-                  <Input
-                    type="email"
-                    value={form.email}
-                    onChange={(e) => handleChange("email", e.target.value)}
-                    placeholder="Enter email"
-                    className="rounded-xl focus-visible:ring-indigo-400"
-                  />
-                </div>
+            <div className="bg-amber-50 border border-amber-100 rounded-xl px-4 py-3">
+              <p className="text-xs text-amber-700 leading-relaxed">
+                Go to <strong>Company Settings → Company Details</strong> and
+                enter your company or freelancer name, then come back to send.
+              </p>
+            </div>
 
-                <Separator />
-
-                {/* Optional fields */}
-                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide flex items-center gap-2">
-                  <Building2 className="w-3 h-3" />
-                  Client Details
-                  <span className="font-normal normal-case text-gray-300">
-                    — optional
-                  </span>
-                </p>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1.5">
-                    <Label className="text-xs font-semibold text-gray-500">
-                      Phone
-                    </Label>
-                    <Input
-                      value={form.phone}
-                      onChange={(e) => handleChange("phone", e.target.value)}
-                      placeholder="Enter phone no."
-                      className="rounded-xl focus-visible:ring-indigo-400"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-xs font-semibold text-gray-500">
-                      GSTIN
-                    </Label>
-                    <Input
-                      value={form.gstin}
-                      onChange={(e) =>
-                        handleChange("gstin", e.target.value.toUpperCase())
-                      }
-                      placeholder="Enter GSTIN"
-                      maxLength={15}
-                      className="rounded-xl focus-visible:ring-indigo-400"
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-1.5">
-                  <Label className="text-xs font-semibold text-gray-500 flex items-center gap-1">
-                    <MapPin className="w-3 h-3" />
-                    Address
-                  </Label>
-                  <Input
-                    value={form.address}
-                    onChange={(e) => handleChange("address", e.target.value)}
-                    placeholder="Street address"
-                    className="rounded-xl focus-visible:ring-indigo-400"
-                  />
-                </div>
-
-                <div className="grid grid-cols-3 gap-3">
-                  <div className="space-y-1.5">
-                    <Label className="text-xs font-semibold text-gray-500">
-                      City
-                    </Label>
-                    <Input
-                      value={form.city}
-                      onChange={(e) => handleChange("city", e.target.value)}
-                      placeholder="Enter City"
-                      className="rounded-xl focus-visible:ring-indigo-400"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-xs font-semibold text-gray-500">
-                      State
-                    </Label>
-                    <Input
-                      value={form.state}
-                      onChange={(e) => handleChange("state", e.target.value)}
-                      placeholder="Enter State"
-                      className="rounded-xl focus-visible:ring-indigo-400"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-xs font-semibold text-gray-500">
-                      Pincode
-                    </Label>
-                    <Input
-                      value={form.pincode}
-                      onChange={(e) => handleChange("pincode", e.target.value)}
-                      placeholder="Enter pincode"
-                      maxLength={6}
-                      className="rounded-xl focus-visible:ring-indigo-400"
-                    />
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Footer */}
-            <div className="flex gap-3 pt-2">
+            <div className="flex gap-3">
               <Button
                 variant="outline"
                 onClick={onClose}
@@ -320,24 +263,117 @@ export function SendInvoiceModal({
                 Cancel
               </Button>
               <Button
-                onClick={handleContinue}
-                disabled={!form.email.trim() || loadingClient}
-                className="flex-1 rounded-xl bg-indigo-600 hover:bg-indigo-700 gap-2"
+                onClick={() => {
+                  onClose();
+                  navigate("/profile");
+                }}
+                className="flex-1 rounded-xl bg-amber-600 hover:bg-amber-700 gap-2"
               >
-                Continue
-                <Send className="w-3.5 h-3.5" />
+                Go to Profile
+                <ArrowRight className="w-3.5 h-3.5" />
               </Button>
             </div>
           </div>
         )}
 
-        {/* ── Step: Confirm ── */}
-        {step === "confirm" && (
+        {/* ── No Email ── */}
+        {modalState === "no_email" && (
           <div className="px-6 py-5 space-y-5">
+            {/* Client chip */}
+            <div className="flex items-center gap-3 bg-gray-50 rounded-xl px-4 py-3">
+              <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold text-sm flex-shrink-0">
+                {clientName.charAt(0).toUpperCase()}
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-gray-900">
+                  {clientName}
+                </p>
+                <p className="text-xs text-gray-400">No email on file</p>
+              </div>
+            </div>
+
+            {/* Email input */}
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold text-gray-500 flex items-center gap-1">
+                <Mail className="w-3 h-3" />
+                Client Email *
+              </Label>
+              <Input
+                type="email"
+                value={typedEmail}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setTypedEmail(val);
+                  setSendError("");
+                  if (val && !isValidEmail(val)) {
+                    setEmailError("Please enter a valid email address");
+                  } else {
+                    setEmailError("");
+                  }
+                }}
+                onBlur={() => {
+                  if (typedEmail && !isValidEmail(typedEmail)) {
+                    setEmailError("Please enter a valid email address");
+                  }
+                }}
+                placeholder="Enter client's email address"
+                className={`rounded-xl focus-visible:ring-indigo-400 ${
+                  emailError ? "border-red-400 focus-visible:ring-red-400" : ""
+                }`}
+                autoFocus
+              />
+              {emailError ? (
+                <p className="text-xs text-red-500">{emailError}</p>
+              ) : (
+                <p className="text-xs text-gray-400">
+                  This will be saved for future invoices to {clientName}.
+                </p>
+              )}
+            </div>
+
+            {sendError && <p className="text-xs text-red-500">{sendError}</p>}
+
+            <div className="flex gap-3">
+              <Button
+                variant="outline"
+                onClick={onClose}
+                className="flex-1 rounded-xl"
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={() => handleSend(typedEmail)}
+                disabled={!typedEmail.trim() || !isValidEmail(typedEmail)}
+                className="flex-1 rounded-xl bg-indigo-600 hover:bg-indigo-700 gap-2"
+                style={{ boxShadow: "0 4px 12px rgba(79,70,229,0.3)" }}
+              >
+                <Send className="w-3.5 h-3.5" />
+                Send Invoice
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* ── Ready ── */}
+        {modalState === "ready" && (
+          <div className="px-6 py-5 space-y-5">
+            {/* Summary card */}
             <div className="bg-gray-50 rounded-2xl p-4 space-y-3">
               <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">
-                Invoice Summary
+                Sending to
               </p>
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold flex-shrink-0">
+                  {clientName.charAt(0).toUpperCase()}
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">
+                    {clientName}
+                  </p>
+                  <p className="text-xs text-indigo-600">{clientEmail}</p>
+                </div>
+              </div>
+              <Separator />
               <div className="space-y-2">
                 <div className="flex justify-between text-sm">
                   <span className="text-gray-500">Invoice</span>
@@ -346,66 +382,71 @@ export function SendInvoiceModal({
                   </span>
                 </div>
                 <div className="flex justify-between text-sm">
-                  <span className="text-gray-500">Client</span>
+                  <span className="text-gray-500">From</span>
                   <span className="font-semibold text-gray-900">
-                    {clientName}
+                    {fromName}
                   </span>
                 </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-500">Email</span>
-                  <span className="font-semibold text-gray-900">
-                    {form.email}
-                  </span>
-                </div>
-                <Separator />
                 <div className="flex justify-between text-sm font-bold">
-                  <span className="text-gray-900">Total</span>
+                  <span className="text-gray-900">Amount Due</span>
                   <span className="text-indigo-600">{formatINR(total)}</span>
                 </div>
               </div>
             </div>
 
-            <div className="bg-amber-50 border border-amber-100 rounded-xl px-4 py-3">
-              <p className="text-xs text-amber-700 leading-relaxed">
-                <span className="font-semibold">Note:</span> The invoice status
-                will be updated to <strong>Sent</strong> and the client details
-                will be saved for future use.
+            <div className="bg-blue-50 border border-blue-100 rounded-xl px-4 py-3">
+              <p className="text-xs text-blue-700 leading-relaxed">
+                The invoice PDF will be attached and the status will update to{" "}
+                <strong>Sent</strong> once delivered.
               </p>
             </div>
+
+            {sendError && <p className="text-xs text-red-500">{sendError}</p>}
 
             <div className="flex gap-3">
               <Button
                 variant="outline"
-                onClick={() => setStep("details")}
+                onClick={onClose}
                 className="flex-1 rounded-xl"
-                disabled={sending}
               >
-                Back
+                Cancel
               </Button>
               <Button
-                onClick={handleSend}
-                disabled={sending}
+                onClick={() => handleSend(clientEmail)}
                 className="flex-1 rounded-xl bg-indigo-600 hover:bg-indigo-700 gap-2"
                 style={{ boxShadow: "0 4px 12px rgba(79,70,229,0.3)" }}
               >
-                {sending ? (
-                  <>
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    Sending...
-                  </>
-                ) : (
-                  <>
-                    <Send className="w-3.5 h-3.5" />
-                    Confirm & Send
-                  </>
-                )}
+                <Send className="w-3.5 h-3.5" />
+                Send Invoice
               </Button>
             </div>
           </div>
         )}
 
-        {/* ── Step: Sent ── */}
-        {step === "sent" && (
+        {/* ── Sending ── */}
+        {modalState === "sending" && (
+          <div className="px-6 py-16 flex flex-col items-center text-center space-y-4">
+            <div className="relative">
+              <div className="w-16 h-16 rounded-2xl bg-indigo-50 border border-indigo-100 flex items-center justify-center">
+                <Send className="w-7 h-7 text-indigo-500" />
+              </div>
+              <div className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-white border border-gray-100 flex items-center justify-center">
+                <Loader2 className="w-3 h-3 animate-spin text-indigo-500" />
+              </div>
+            </div>
+            <div>
+              <p className="text-base font-bold text-gray-900">
+                Sending invoice…
+              </p>
+              <p className="text-sm text-gray-400 mt-1">
+                Generating PDF and sending to {clientEmail || typedEmail}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* ── Sent ── */}
+        {modalState === "sent" && (
           <div className="px-6 py-10 flex flex-col items-center text-center space-y-4">
             <div className="w-16 h-16 rounded-2xl bg-emerald-50 border border-emerald-100 flex items-center justify-center">
               <CheckCircle2 className="w-8 h-8 text-emerald-500" />
@@ -413,13 +454,14 @@ export function SendInvoiceModal({
             <div>
               <p className="text-base font-bold text-gray-900">Invoice Sent!</p>
               <p className="text-sm text-gray-400 mt-1">
-                {invoiceNumber} has been sent to
+                {invoiceNumber} has been delivered to
               </p>
               <p className="text-sm font-semibold text-indigo-600 mt-0.5">
-                {form.email}
+                {clientEmail || typedEmail}
               </p>
             </div>
-            <div className="bg-gray-50 rounded-xl px-4 py-3 w-full text-left space-y-1">
+
+            <div className="bg-gray-50 rounded-xl px-4 py-3 w-full text-left space-y-2">
               <div className="flex justify-between text-xs">
                 <span className="text-gray-400">Client</span>
                 <span className="font-medium text-gray-700">{clientName}</span>
@@ -437,6 +479,7 @@ export function SendInvoiceModal({
                 </Badge>
               </div>
             </div>
+
             <Button
               onClick={onClose}
               className="w-full rounded-xl bg-indigo-600 hover:bg-indigo-700 mt-2"
