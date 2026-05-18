@@ -1,46 +1,43 @@
 import { SessionInvoice } from "@/components/invoice/InvoicePanel";
 
-export function buildSessionContext(sessionInvoices: SessionInvoice[]): string {
-  if (sessionInvoices.length === 0) {
-    return "No existing invoices in this session.";
-  }
+export function buildSessionContext(invoices: SessionInvoice[]): string {
+  if (invoices.length === 0) return "No existing invoices in this session.";
 
-  const lines = sessionInvoices.map((si, index) => {
-    const inv = si.invoice;
-    const num = si.invoiceNumber || "Draft";
-    const isLatest = index === sessionInvoices.length - 1;
+  return invoices
+    .map((si, index) => {
+      const inv = si.invoice;
+      const isMostRecent = index === invoices.length - 1;
 
-    const items =
-      inv.lineItems
-        ?.map(
-          (l, i) =>
-            `${i + 1}. ${l.description} | Qty: ${
-              l.quantity
-            } | Rate: ₹${l.rate.toLocaleString(
-              "en-IN"
-            )} | Amount: ₹${l.amount.toLocaleString("en-IN")}`
-        )
-        .join("\n") || "No items";
+      // Build line items string
+      const lineItemsStr =
+        inv.lineItems
+          ?.map(
+            (item) =>
+              `  - ${item.description} | Qty: ${item.quantity} ${
+                item.unit
+              } | Rate: ₹${item.rate.toLocaleString(
+                "en-IN"
+              )} | Amount: ₹${item.amount.toLocaleString("en-IN")}`
+          )
+          .join("\n") ?? "  - (no line items)";
 
-    return `
-        Invoice Ref: ${num}${isLatest ? " [MOST RECENT]" : ""}
-        Client: ${inv.clientName}
-        Invoice Month: ${inv.invoiceMonth || "Unknown"}
-        Invoice Date: ${inv.invoiceDate || "Unknown"}
-        GST: ${inv.gstPercent}% ${inv.gstType || "CGST_SGST"}
-        Discount: ${inv.discountType || "none"} ${inv.discountValue || 0}
-        Payment Terms: ${inv.paymentTermsDays} days
-        Notes: ${inv.notes || ""}
-        Subtotal: ₹${inv.subtotal.toLocaleString("en-IN")}
-        Total: ₹${inv.total.toLocaleString("en-IN")}
-        Line Items:
-        ${items}
-        ---`;
-  });
-
-  return `Existing invoices in this session (oldest first, last = most recent):\n\n${lines.join(
-    "\n\n"
-  )}`;
+      return [
+        `Invoice Ref: ${si.invoiceNumber ?? "Draft"}${
+          isMostRecent ? " [MOST RECENT]" : ""
+        }`,
+        `Client: ${inv.clientName}`,
+        `Invoice Month: ${inv.invoiceMonth ?? ""}`,
+        `GST: ${inv.gstPercent}% ${inv.gstType ?? "CGST_SGST"}`,
+        `Payment Terms: ${inv.paymentTermsDays} days`,
+        `Subtotal: ₹${inv.subtotal?.toLocaleString("en-IN")}`,
+        `Total: ₹${inv.total.toLocaleString("en-IN")}`,
+        `Line Items:\n${lineItemsStr}`,
+        inv.notes ? `Notes: ${inv.notes}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+    })
+    .join("\n---\n");
 }
 
 export function findMatchingInvoices(

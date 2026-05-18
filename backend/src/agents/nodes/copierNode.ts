@@ -1,8 +1,5 @@
-import { ChatOpenAI } from "@langchain/openai";
-import { PromptTemplate } from "@langchain/core/prompts";
 import { InvoiceAgentState, AgentResult } from "../state";
-import { ParsedInvoice, invoiceSchema } from "../schemas/invoiceSchema";
-import { COPIER_PROMPT } from "../prompts/invoicePrompt";
+import { ParsedInvoice } from "../schemas/invoiceSchema";
 import { findClientMatch } from "../../lib/clientMatcher";
 import { recalculateTotals, formatINR } from "../utils/invoiceUtils";
 import { Invoice } from "../../models/Invoice";
@@ -76,24 +73,63 @@ function findSourceBlock(sessionContext: string, ref: string): string | null {
   return null;
 }
 
-async function fetchLastConfirmedInvoice(userId: string): Promise<string> {
+async function fetchLastConfirmedInvoice(
+  userId: string
+): Promise<ParsedInvoice | null> {
   try {
     const last = await Invoice.findOne({ userId, status: "confirmed" })
       .sort({ createdAt: -1 })
       .lean();
-    if (!last) return "";
-    const items = last.lineItems
-      .map((i) => `${i.description} | Qty: ${i.quantity} | Rate: ₹${i.rate}`)
-      .join("\n");
-    return `Invoice Ref: ${last.invoiceNumber}\nClient: ${last.clientName}\nInvoice Month: ${last.invoiceMonth}\nGST: ${last.gstPercent}% ${last.gstType}\nPayment Terms: ${last.paymentTermsDays} days\nSubtotal: ₹${last.subtotal}\nTotal: ₹${last.total}\nLine Items:\n${items}`;
+    if (!last) return null;
+    return {
+      clientName: last.clientName,
+      lineItems: last.lineItems,
+      gstPercent: last.gstPercent,
+      gstType: last.gstType as "IGST" | "CGST_SGST",
+      paymentTermsDays: last.paymentTermsDays,
+      subtotal: last.subtotal,
+      taxableAmount: last.taxableAmount ?? last.subtotal,
+      gstAmount: last.gstAmount,
+      cgstAmount: last.cgstAmount ?? 0,
+      sgstAmount: last.sgstAmount ?? 0,
+      igstAmount: last.igstAmount ?? 0,
+      discountType:
+        (last.discountType as "percent" | "amount" | "none") ?? "none",
+      discountValue: last.discountValue ?? 0,
+      discountAmount: last.discountAmount ?? 0,
+      notes: last.notes ?? "",
+      total: last.total,
+      invoiceDate: last.invoiceDate
+        ? new Date(last.invoiceDate).toISOString().split("T")[0]
+        : new Date().toISOString().split("T")[0],
+      invoiceMonth: last.invoiceMonth ?? "",
+      intent: "copy",
+      targetInvoiceRef: "",
+      changedFields: [],
+      warning: "",
+    } as unknown as ParsedInvoice;
   } catch {
-    return "";
+    return null;
   }
 }
 
 export async function copierNode(
   state: InvoiceAgentState
 ): Promise<Partial<InvoiceAgentState>> {
+  console.log("=== COPIER NODE ===");
+  console.log("targetRef:", state.targetRef);
+  console.log("parsedInvoice clientName:", state.parsedInvoice?.clientName);
+  console.log(
+    "parsedInvoice lineItems:",
+    JSON.stringify(
+      state.parsedInvoice?.lineItems?.map((i) => ({
+        description: i.description,
+        qty: i.quantity,
+        rate: i.rate,
+      }))
+    )
+  );
+  console.log("sessionContext:", state.sessionContext?.substring(0, 500));
   const ref = state.targetRef || "";
   const hasSession =
     state.sessionContext &&
@@ -123,7 +159,12 @@ export async function copierNode(
     }
   }
 
-  // ── Find source block ──
+  // ── Find source invoice ──
+  // Priority 1: full invoice passed from frontend (has all line items)
+  // Priority 2: cross-session → fetch last confirmed from DB
+  // Priority 3: in-session context string (fallback, limited data)
+  // Priority 4: nothing found
+
   const promptLower = state.prompt.toLowerCase();
   const isCrossSession =
     !hasSession &&
@@ -132,11 +173,15 @@ export async function copierNode(
       promptLower.includes("like last time") ||
       promptLower.includes("previous invoice"));
 
-  let sourceBlock: string | null = null;
+  let sourceInv: ParsedInvoice | null = null;
 
-  if (isCrossSession) {
-    const dbContext = await fetchLastConfirmedInvoice(state.userId);
-    if (!dbContext) {
+  if (state.parsedInvoice && state.parsedInvoice.clientName) {
+    // Priority 1: full invoice from frontend — most reliable
+    sourceInv = state.parsedInvoice;
+  } else if (isCrossSession) {
+    // Priority 2: last confirmed invoice from DB
+    sourceInv = await fetchLastConfirmedInvoice(state.userId);
+    if (!sourceInv) {
       return {
         agentResult: {
           action: "not_found",
@@ -144,10 +189,10 @@ export async function copierNode(
         },
       };
     }
-    sourceBlock = dbContext;
   } else if (hasSession) {
-    sourceBlock = findSourceBlock(state.sessionContext, ref || "last");
-    if (!sourceBlock) {
+    // Priority 3: session context string (no line items — will result in empty invoice)
+    const block = findSourceBlock(state.sessionContext, ref || "last");
+    if (!block) {
       return {
         agentResult: {
           action: "not_found",
@@ -155,6 +200,14 @@ export async function copierNode(
         },
       };
     }
+    // Can't build a proper ParsedInvoice from a session block (no line items)
+    // This case only happens when frontend failed to pass parsedInvoice
+    return {
+      agentResult: {
+        action: "not_found",
+        message: `Couldn't retrieve full invoice details for **${ref}**. Please try again.`,
+      },
+    };
   } else {
     return {
       agentResult: {
@@ -165,9 +218,6 @@ export async function copierNode(
   }
 
   // ── Extract new client name from prompt ──
-  // "Copy Priya's invoice for Rahul" → "Rahul"
-  // "Same as last one but for Ankit" → "Ankit"
-  // "Copy last invoice for a new client named Meera" → "Meera"
   const namedMatch =
     state.prompt.match(/named\s+([A-Z][a-zA-Z]+)/i)?.[1] || // "named Meera"
     state.prompt.match(/but\s+for\s+([A-Z][a-zA-Z]+)/i)?.[1] || // "but for Ankit"
@@ -178,50 +228,52 @@ export async function copierNode(
     "";
   const newClientName = namedMatch.trim() || "Client";
 
-  // ── Use focused COPIER_PROMPT ──
-  const model = new ChatOpenAI({
-    modelName: "gpt-4o-mini",
-    temperature: 0,
-    openAIApiKey: process.env.OPENAI_API_KEY,
-  });
+  // ── Apply overrides deterministically from prompt ──
+  let gstPercent = sourceInv.gstPercent;
+  let gstType = sourceInv.gstType ?? "CGST_SGST";
+  let paymentTermsDays = sourceInv.paymentTermsDays;
 
-  const structured = model.withStructuredOutput(invoiceSchema);
-  const template = PromptTemplate.fromTemplate(COPIER_PROMPT);
-
-  const currentMonth = new Date().toLocaleDateString("en-IN", {
-    month: "long",
-    year: "numeric",
-  });
-  const currentDate = new Date().toISOString().split("T")[0];
-
-  // Extract any override instructions from the prompt
-  // e.g. "with no GST", "30 day payment terms", "with 12% GST"
-  const overrideParts: string[] = [];
   const pl = state.prompt.toLowerCase();
-  if (/no gst|without gst|0% gst|gst exempt/.test(pl))
-    overrideParts.push("Set gstPercent=0, all GST amounts=0");
-  if (/with igst/.test(pl)) overrideParts.push("Set gstType=IGST");
-  const gstPctMatch = pl.match(/with\s+(\d+)%\s+gst/);
-  if (gstPctMatch) overrideParts.push(`Set gstPercent=${gstPctMatch[1]}`);
-  const termMatch = pl.match(/(\d+)\s*day(?:s)?\s+(?:payment\s+)?terms?/);
-  if (termMatch) overrideParts.push(`Set paymentTermsDays=${termMatch[1]}`);
-  const overrides =
-    overrideParts.length > 0
-      ? overrideParts.join("; ")
-      : "None — copy all fields exactly as in source";
 
-  const formatted = await template.format({
-    sourceBlock,
-    newClientName,
-    currentDate,
-    currentMonth,
-    overrides,
-  });
+  // No GST override
+  if (/no gst|without gst|0% gst|gst exempt/.test(pl)) {
+    gstPercent = 0;
+  }
 
-  const raw = (await structured.invoke(formatted)) as ParsedInvoice;
+  // Specific GST % override ("with 12% GST")
+  const gstPctOverride = pl.match(/with\s+(\d+(?:\.\d+)?)\s*%\s*gst/);
+  if (gstPctOverride) gstPercent = parseFloat(gstPctOverride[1]);
+
+  // GST type override
+  if (/with igst/.test(pl)) gstType = "IGST";
+  if (/with cgst|with cgst.sgst/.test(pl)) gstType = "CGST_SGST";
+
+  // Payment terms override ("30 day terms", "net 45")
+  const termOverride = pl.match(/(\d+)\s*day(?:s)?\s+(?:payment\s+)?terms?/);
+  const netOverride = pl.match(/net\s+(\d+)/);
+  if (termOverride) paymentTermsDays = parseInt(termOverride[1]);
+  else if (netOverride) paymentTermsDays = parseInt(netOverride[1]);
+
+  // ── Build copied invoice deterministically — no LLM ──
+  const now = new Date();
   const parsedInvoice = recalculateTotals({
-    ...raw,
+    ...sourceInv,
     clientName: newClientName,
+    invoiceDate: now.toISOString().split("T")[0],
+    invoiceMonth: now.toLocaleDateString("en-IN", {
+      month: "long",
+      year: "numeric",
+    }),
+    lineItems: sourceInv.lineItems,
+    gstPercent,
+    gstType,
+    paymentTermsDays,
+    discountType: sourceInv.discountType ?? "none",
+    discountValue: sourceInv.discountValue ?? 0,
+    notes: sourceInv.notes ?? "",
+    // Reset invoice-specific fields
+    changedFields: [],
+    warning: "",
   });
 
   // ── Client match for new client ──

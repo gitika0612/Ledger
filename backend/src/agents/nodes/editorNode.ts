@@ -143,6 +143,45 @@ export async function editorNode(
     };
   }
 
+  // ── Deterministic REMOVE — match by name, no LLM needed ──
+  const removeMatch = state.prompt.match(
+    /\b(?:remove|delete)\b\s+(.+?)(?:\s+from|\s+in|\s*$)/i
+  );
+  if (removeMatch) {
+    const target = removeMatch[1]
+      .toLowerCase()
+      .trim()
+      .replace(/^the\s+/, "");
+    const remaining = existing.lineItems.filter(
+      (item) => !item.description.toLowerCase().includes(target)
+    );
+
+    if (remaining.length < existing.lineItems.length) {
+      // Found and removed at least one item
+      const updated = recalculateTotals({ ...existing, lineItems: remaining });
+      const removedItems = existing.lineItems
+        .filter((item) => item.description.toLowerCase().includes(target))
+        .map((i) => `**${i.description}**`);
+
+      return {
+        parsedInvoice: updated,
+        agentResult: {
+          action: "edited",
+          message: buildEditMessage(
+            updated,
+            ref,
+            [`Removed ${removedItems.join(", ")}`],
+            ""
+          ),
+          invoice: updated,
+          targetRef: ref,
+          changedFields: ["lineItems"],
+        },
+      };
+    }
+    // If no match found → fall through to LLM
+  }
+
   // ── LLM path: focused EDITOR_PROMPT — only sees the one invoice ──
   const model = new ChatOpenAI({
     modelName: "gpt-4o-mini",

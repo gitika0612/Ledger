@@ -40,7 +40,7 @@ ROUTING RULES — read carefully:
   - "₹1,00,000 — 40% design, 60% development" → NEW invoice with 2 line items (NOT split, NOT multi)
   - Percentage split like "40% X, 60% Y" is ALWAYS "new" with multiple line items in ONE invoice
   - CRITICAL: If a prompt has an amount + percentage breakdown (e.g. "₹1,00,000 — 40% X, 60% Y"), it is ALWAYS "new". Never "multi". Never "split".
-  - CRITICAL: If the prompt contains a client name + amount/service description with NO edit keywords, it is ALWAYS "new", regardless of whether that client already has an invoice in the session.
+  - CRITICAL: If the prompt contains a client name + amount/service description with NO edit keywords and NO copy keywords, it is ALWAYS "new".
 
 "edit" = modify an EXISTING invoice in session. Use when:
   - The prompt has an edit keyword (add/remove/replace/change/update/set/increase/decrease/apply/put/delete/swap)
@@ -66,10 +66,15 @@ ROUTING RULES — read carefully:
   KEY RULE: if prompt has [edit keyword] + [client]'s invoice → it is ALWAYS "edit" regardless of amount
 
 "copy" = duplicate existing invoice for a DIFFERENT client. Use when:
-  - "same invoice for X"
-  - "copy [client]'s invoice for [other client]"
-  - "same as last one but for [client]"
-  - targetRef = source client name or invoice number
+  - "same invoice as [client]'s" → copy, targetRef = that client
+  - "same as [client]'s invoice" → copy, targetRef = that client
+  - "create same invoice as [client]'s but for [other]" → copy, targetRef = first client
+  - "copy [client]'s invoice for [other client]" → copy, targetRef = first client
+  - "same as last one but for [client]" → copy, targetRef = "last"
+  - targetRef = SOURCE client name or invoice number (the one being copied FROM)
+  CRITICAL: "Create same invoice as X's but for Y" starts with "Create" but is ALWAYS "copy" NOT "new"
+  CRITICAL: Any phrase containing "same invoice as [client]" or "same as [client]'s" = ALWAYS "copy"
+  CRITICAL: "same invoice" + client name = copy, regardless of what verb starts the sentence
 
 "multi" = multiple SEPARATE invoices for different months/periods. Use when:
   - "for Jan, Feb, March" (specific months listed)
@@ -86,23 +91,36 @@ ROUTING RULES — read carefully:
   - NOT for percentage splits like "40% design, 60% development" (that's "new")
 
 DISAMBIGUATION EXAMPLES:
-"Invoice Priya ₹50,000 no GST" → new (client name + amount = fresh invoice)
-"Invoice Rahul ₹1,00,000 — 40% design, 60% development" → new (single invoice, 2 line items — NEVER multi or split)
+"Invoice Priya ₹50,000 no GST" → new
+"Invoice Rahul ₹1,00,000 — 40% design, 60% development" → new (single invoice, 2 line items)
 "Add hosting fees in last invoice" → edit, targetRef = last invoice client/number
 "Split Ankit's invoice into 2 parts" → split
 "Create 3 invoices for Jan, Feb, March" → multi, estimatedCount=3
-"Same invoice as last one but for Ankit" → copy
-"Copy Rahul's invoice for Priya" → copy, targetRef = "Rahul"
+"Same invoice as last one but for Ankit" → copy, targetRef="last"
+"Copy Rahul's invoice for Priya" → copy, targetRef="Rahul"
 "Invoice Priya again for ₹50,000 no GST" → new
+"Create same invoice as Priya's but for Kartik with no GST" → copy, targetRef="Priya"
+"Make same invoice as Rahul's for Meera" → copy, targetRef="Rahul"
+"Same as Priya's invoice but for Kartik" → copy, targetRef="Priya"
 
 Also output:
-- clientName: the primary client name from the prompt (e.g. "Priya", "Rahul", "Ankit")
-- targetRef: for copy/edit, the SOURCE invoice reference (client name or INV number)`
+- clientName: the DESTINATION client name (e.g. for "copy Rahul's for Priya" → clientName="Priya")
+- targetRef: for copy, the SOURCE client (e.g. for "copy Rahul's for Priya" → targetRef="Rahul")
+  for edit, the invoice being edited (client name or INV number)`
   );
 
   let intent = result.intent as AgentIntent;
   const isSplit = intent === "split";
   if (isSplit) intent = "new";
+
+  console.log(
+    "🔀 Router result:",
+    JSON.stringify({
+      intent: result.intent,
+      targetRef: result.targetRef,
+      clientName: result.clientName,
+    })
+  );
 
   return {
     intent,
@@ -111,7 +129,5 @@ Also output:
     splitCount: isSplit ? result.estimatedCount : 1,
     targetRef: result.targetRef || "",
     routerNotes: result.notes,
-    // clientName passed downstream so nodes don't re-parse it
-    // (stored in routerNotes for now since state doesn't have clientName field)
   };
 }

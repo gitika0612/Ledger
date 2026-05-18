@@ -1,13 +1,3 @@
-/**
- * invoicePrompts.ts — one focused prompt per agent node.
- */
-
-// ─────────────────────────────────────────────────────────────
-// GENERATOR
-// Fix Issue 1: GST inclusive → ONE line item with back-calculated subtotal
-// Fix Issue 2: Credit note must have actual line items with amount
-// Fix Issue 1b: memoryContext must NOT pollute a different client's invoice
-// ─────────────────────────────────────────────────────────────
 export const GENERATOR_PROMPT = `You are an invoice parser for Indian freelancers.
 Parse the request and return valid invoice JSON. No explanation.
 
@@ -40,17 +30,33 @@ Parse ONLY what the user explicitly mentions. Do NOT invent items from history.
 • "IGST" / "inter-state"             → gstType="IGST"
 • "with X% GST" / "with GST"         → rate is BASE price, GST added ON TOP. NEVER back-calculate.
   Example: "₹30,000 with 5% GST" → subtotal=30000, gstAmount=1500, total=31500
-• "GST included" / "inclusive of GST" / "including GST":
-  → The stated amount IS the final total. Derive subtotal from it, never round the total.
+• "GST included" / "inclusive of GST" / "including GST" / "incl. GST":
+  CRITICAL: The stated ₹ amount IS the FINAL TOTAL already containing GST.
+  Do NOT add GST on top. Back-calculate subtotal FROM the total.
   → gstAmount = round(total × gstRate ÷ (100 + gstRate))
-  → lineItem amount (subtotal) = total − gstAmount
-  → Example: ₹50,000 GST included at 18%:
-     gstAmount = round(50000 × 18 ÷ 118) = round(7627.1) = 7627
-     lineItem amount = 50000 − 7627 = 42373, total = 50000 EXACTLY
-  → Example: ₹1,18,000 inclusive of 18% GST:
-     gstAmount = round(118000 × 18 ÷ 118) = 18000
-     lineItem amount = 118000 − 18000 = 100000, total = 118000
-  → ONE line item only. Do NOT split into multiple items.
+  → lineItem amount = total − gstAmount
+  → total stays EXACTLY as stated. Never add anything on top.
+
+  EXAMPLE — "Invoice Priya ₹50,000 GST included":
+  → total = 50000 (the stated amount — do NOT add more)
+  → gstAmount = round(50000 × 18 ÷ 118) = 7627
+  → lineItem amount = 50000 − 7627 = 42373
+  → subtotal = 42373, gstAmount = 7627, total = 50000 ✓
+
+  EXAMPLE — "₹1,18,000 inclusive of 18% GST":
+  → total = 118000
+  → gstAmount = round(118000 × 18 ÷ 118) = 18000
+  → lineItem amount = 100000, total = 118000 ✓
+
+  WRONG (never do this): ₹50,000 + 18% = ₹59,000 ✗
+  ONE line item only. Do NOT split.
+
+- DISAMBIGUATION — "with GST" vs "GST included":
+  - "₹50,000 with 18% GST" → base is 50000, ADD GST → total = 59000
+  - "₹50,000 GST included"  → total IS 50000, BACK-CALCULATE → subtotal = 42373
+  - "₹50,000 with GST"      → base is 50000, ADD GST → total = 59000
+  - "₹50,000 including GST" → total IS 50000, BACK-CALCULATE → subtotal = 42373
+  Key signal: "included" / "inclusive" / "including" = price ALREADY HAS GST baked in.
 
 ━━━ CALCULATIONS ━━━
 For GST-INCLUSIVE invoices: use the values from the GST RULES section above — do NOT recalculate total.
@@ -105,9 +111,6 @@ HSN/SAC: 998314=software dev | 998312=web design | 998313=IT consulting | 998315
 ━━━ REQUEST ━━━
 {prompt}`;
 
-// ─────────────────────────────────────────────────────────────
-// EDITOR
-// ─────────────────────────────────────────────────────────────
 export const EDITOR_PROMPT = `You are editing an existing invoice. Apply ONLY the requested change.
 
 ━━━ CURRENT INVOICE ━━━
@@ -136,6 +139,14 @@ ADD item ("add X ₹Y"):
 
 REMOVE item ("remove X"):
 → Delete only that specific item, keep all others
+→ Return lineItems with ONLY the remaining items — do NOT include the removed item
+→ changedFields = ["lineItems"]
+
+REMOVE EXAMPLE:
+Current items: ["Web Development Services" ₹20,000], ["brand strategy" ₹10,000]
+Request: "Remove brand strategy"
+→ Return lineItems = [{{ description: "Web Development Services", qty:1, rate:20000, amount:20000 }}]
+→ "brand strategy" must NOT appear in the returned lineItems
 → changedFields = ["lineItems"]
 
 REPLACE ("replace X with Y" or "replace X to Y"):
@@ -168,9 +179,6 @@ RECALCULATE after edit:
 5. CGST_SGST: cgst=sgst=round(gstAmount/2), igst=0
 6. total = taxableAmount + gstAmount`;
 
-// ─────────────────────────────────────────────────────────────
-// COPIER
-// ─────────────────────────────────────────────────────────────
 export const COPIER_PROMPT = `You are copying an existing invoice for a new client.
 
 ━━━ SOURCE INVOICE TO COPY ━━━
@@ -193,10 +201,6 @@ clientName = "{newClientName}"
 • Apply ADDITIONAL CHANGES from the section above AFTER copying (e.g. "no GST" → set gstPercent=0, "30 day terms" → paymentTermsDays=30)
 • Recalculate totals after any changes`;
 
-// ─────────────────────────────────────────────────────────────
-// MULTI_INVOICE — one invoice per month in a batch
-// Fix Issue 4/5/6: each invoice gets exactly ONE line item for that month
-// ─────────────────────────────────────────────────────────────
 export const MULTI_INVOICE_PROMPT = `You are creating invoice #{index} of {total} in a batch.
 
 ━━━ BASE REQUEST ━━━
@@ -222,10 +226,6 @@ This invoice month: "May 2026"
 → gstPercent=18, subtotal=15000, gstAmount=2700, total=17700
 → invoiceMonth="May 2026" (exactly as given)`;
 
-// ─────────────────────────────────────────────────────────────
-// MULTI_DETECT — restored to working version with subPrompts
-// Fix Issue 4/5/6: restore the original detailed prompt that worked
-// ─────────────────────────────────────────────────────────────
 export const MULTI_DETECT_PROMPT = `You are detecting if a prompt requests MULTIPLE SEPARATE invoices.
 
 Current date: {currentDate}

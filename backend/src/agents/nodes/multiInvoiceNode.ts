@@ -56,11 +56,13 @@ function extractExplicitMonths(prompt: string, year: number): string[] {
     december: 11,
   };
 
-  // Step 1: extract months to SKIP (words after "skip", "except", "not including")
-  const skipSet = new Set<number>();
   const lower = prompt.toLowerCase();
+
+  // Step 1: Build skip set — find everything after "skip"/"except"/"excluding"
+  const skipSet = new Set<number>();
+  // Use greedy match and stop at closing paren, period, or end
   const skipRegex =
-    /(?:skip|except|not\s+including?|excluding?)\s+([\w,\s]+?)(?:\.|$)/g;
+    /\b(?:skip|except|not\s+includ\w*|exclud\w*)\b\s+([\w\s,]+?)(?:[).!?]|$)/gi;
   let skipMatch;
   while ((skipMatch = skipRegex.exec(lower)) !== null) {
     for (const part of skipMatch[1].split(/[\s,]+/)) {
@@ -69,9 +71,11 @@ function extractExplicitMonths(prompt: string, year: number): string[] {
     }
   }
 
-  // Step 2: extract included months, excluding skip words
+  // Step 2: Extract included months in ORDER they appear, excluding skipped ones
   const found: number[] = [];
-  for (const part of lower.split(/[\s,()]+/)) {
+  // Split on non-alpha characters but preserve order
+  const parts = lower.split(/[\s,()!?]+/);
+  for (const part of parts) {
     const clean = part.replace(/[^a-z]/g, "");
     if (clean in monthAbbrevMap) {
       const idx = monthAbbrevMap[clean];
@@ -80,6 +84,7 @@ function extractExplicitMonths(prompt: string, year: number): string[] {
       }
     }
   }
+
   return found.map((idx) => `${MONTH_NAMES[idx]} ${year}`);
 }
 
@@ -166,13 +171,16 @@ export async function multiInvoiceNode(
   // ── Step 2: Determine correct months ──
   const explicitMonths = extractExplicitMonths(state.prompt, currentYear);
   let expectedMonths: string[];
+  let finalCount = count; // from LLM detection
 
-  if (explicitMonths.length === count) {
+  if (explicitMonths.length >= 2) {
+    // Explicit months found (with or without skip) — use them directly
+    // Override LLM count since LLM ignores skip instructions
     expectedMonths = explicitMonths;
-  } else if (explicitMonths.length > 0) {
-    const firstIdx = MONTH_NAMES.indexOf(explicitMonths[0].split(" ")[0]);
+    finalCount = explicitMonths.length;
+  } else if (explicitMonths.length === 1) {
     expectedMonths = generateConsecutiveMonths(
-      firstIdx >= 0 ? firstIdx : currentMonthIdx,
+      MONTH_NAMES.indexOf(explicitMonths[0].split(" ")[0]),
       currentYear,
       count
     );
@@ -194,7 +202,7 @@ export async function multiInvoiceNode(
 
   const parsedInvoices: ParsedInvoice[] = [];
 
-  for (let i = 0; i < count; i++) {
+  for (let i = 0; i < finalCount; i++) {
     const invoiceMonth = expectedMonths[i];
     const invoiceDate = monthToDate(invoiceMonth);
 
@@ -235,7 +243,7 @@ export async function multiInvoiceNode(
 
   const result: AgentResult = {
     action: "multi_created",
-    message: `Done! Prepared **${count} invoices** for **${clientName}** (${monthList}).\n\nTotal value: **${formatINR(
+    message: `Done! Prepared **${finalCount} invoices** for **${clientName}** (${monthList}).\n\nTotal value: **${formatINR(
       totalSum
     )}**\n\nReview each invoice in the side panel.`,
     invoices: parsedInvoices,

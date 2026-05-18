@@ -38,7 +38,6 @@ export const invoiceSchema = z.object({
   invoiceDate: z.string(),
   invoiceMonth: z.string(),
   changedFields: z.array(z.string()),
-  // Empty string means no warning. OpenAI structured outputs requires all fields to be required.
   warning: z.string(),
 });
 
