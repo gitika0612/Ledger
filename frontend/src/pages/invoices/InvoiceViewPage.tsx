@@ -27,6 +27,8 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { SendInvoiceModal } from "@/components/invoice/modals/SendInvoiceModel";
 import { toast } from "sonner";
+import { getClientByName } from "@/lib/api/clientApi";
+import type { ClientAPI } from "@/lib/api/clientApi";
 
 interface Invoice {
   _id: string;
@@ -157,6 +159,7 @@ export function InvoiceViewPage() {
   const [editing, setEditing] = useState(false);
   const [showSendModal, setShowSendModal] = useState(false);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [client, setClient] = useState<ClientAPI | null>(null);
 
   useEffect(() => {
     if (!id) return;
@@ -165,6 +168,13 @@ export function InvoiceViewPage() {
       .catch(console.error)
       .finally(() => setLoading(false));
   }, [id]);
+
+  useEffect(() => {
+    if (!invoice?.clientName || !user) return;
+    getClientByName(user.id, invoice.clientName)
+      .then((c) => setClient(c))
+      .catch(() => {});
+  }, [invoice?.clientName, user?.id]);
 
   const handleDownload = async () => {
     if (!invoice) return;
@@ -612,16 +622,80 @@ export function InvoiceViewPage() {
                 </div>
                 <div>
                   <p className="text-sm font-bold text-gray-900">
-                    {invoice.clientName}
+                    {client?.name || invoice.clientName}
                   </p>
                   <p className="text-xs text-gray-400">Client</p>
                 </div>
               </div>
-              <Separator className="my-4" />
-              <p className="text-xs text-gray-400 leading-relaxed">
-                Client details like email and phone will be available when you
-                Send the Invoice.
-              </p>
+
+              {client ? (
+                <>
+                  <Separator className="my-4" />
+                  <div className="space-y-2.5">
+                    {client.email && (
+                      <div className="flex items-start gap-2">
+                        <p className="text-xs text-gray-400 w-14 flex-shrink-0 pt-0.5">
+                          Email
+                        </p>
+                        <p className="text-xs text-gray-700 break-all">
+                          {client.email}
+                        </p>
+                      </div>
+                    )}
+                    {client.phone && (
+                      <div className="flex items-start gap-2">
+                        <p className="text-xs text-gray-400 w-14 flex-shrink-0 pt-0.5">
+                          Phone
+                        </p>
+                        <p className="text-xs text-gray-700">{client.phone}</p>
+                      </div>
+                    )}
+                    {(client.address || client.city || client.state) && (
+                      <div className="flex items-start gap-2">
+                        <p className="text-xs text-gray-400 w-14 flex-shrink-0 pt-0.5">
+                          Address
+                        </p>
+                        <div>
+                          {client.address && (
+                            <p className="text-xs text-gray-700">
+                              {client.address}
+                            </p>
+                          )}
+                          {(client.city || client.state) && (
+                            <p className="text-xs text-gray-700">
+                              {[client.city, client.state]
+                                .filter(Boolean)
+                                .join(", ")}
+                            </p>
+                          )}
+                          {client.pincode && (
+                            <p className="text-xs text-gray-700">
+                              {client.pincode}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                    {client.gstin && (
+                      <div className="flex items-start gap-2">
+                        <p className="text-xs text-gray-400 w-14 flex-shrink-0 pt-0.5">
+                          GSTIN
+                        </p>
+                        <p className="text-xs font-mono text-gray-700">
+                          {client.gstin}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <Separator className="my-4" />
+                  <p className="text-xs text-gray-400 leading-relaxed">
+                    No contact details saved for this client yet.
+                  </p>
+                </>
+              )}
             </div>
 
             {/* Actions card */}

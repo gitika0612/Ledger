@@ -278,8 +278,22 @@ export async function parseClientDetails(
             }
           }
         } else {
-          // No recognized state found — treat all parts as address
-          address = address || parts.join(", ");
+          // No recognized state — treat last non-address part as city, rest as address
+          const lastPart = parts[parts.length - 1];
+          if (parts.length === 1) {
+            if (ADDRESS_KEYWORDS.test(parts[0])) {
+              address = address || parts[0];
+            } else {
+              city = city || parts[0];
+            }
+          } else if (!ADDRESS_KEYWORDS.test(lastPart)) {
+            // Last part looks like a city name
+            city = city || lastPart;
+            address = address || parts.slice(0, -1).join(", ");
+          } else {
+            // Everything looks like address lines
+            address = address || parts.join(", ");
+          }
         }
       }
     }
