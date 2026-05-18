@@ -2,7 +2,7 @@
 
 > Create professional GST-compliant invoices in seconds. Just describe the work — Ledger handles the rest.
 
-**Live demo →** [invoice-os-sigma.vercel.app](https://invoice-os-sigma.vercel.app)
+**Live demo →** [ledgerbrain.vercel.app](https://ledgerbrain.vercel.app)
 
 ---
 
