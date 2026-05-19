@@ -83,7 +83,17 @@ ROUTING RULES — read carefully:
   - "monthly retainer for 4 months" → multi (4 separate monthly invoices)
   - "retainer for next 3 months" → multi
   - estimatedCount = number of invoices
-  NEVER use "multi" for: percentage splits, multiple line items in one invoice, retainer/maintenance without a count
+  CRITICAL: "monthly invoice for N months" → ALWAYS multi, estimatedCount=N
+  CRITICAL: "for N months" at the end of any prompt → ALWAYS multi, estimatedCount=N
+  CRITICAL: "monthly" + "N months" in the same prompt → ALWAYS multi
+  CRITICAL: "Invoice [client] ₹X for [month], [month], [month]" → ALWAYS multi, one invoice per month listed
+  CRITICAL: Multiple month names in a single prompt → ALWAYS multi, estimatedCount = number of months
+  CRITICAL: "for Jan, Feb, March" / "for January, February, March" → ALWAYS multi even if prompt starts with "Invoice"
+  CRITICAL: "Invoice [client1] ₹X and [client2] ₹Y" → ALWAYS multi, estimatedCount=2
+  CRITICAL: Multiple client names with separate amounts in one prompt → ALWAYS multi
+  CRITICAL: "[name] ₹X and [name] ₹Y" pattern → multi, never new
+  NEVER use "multi" for: percentage splits, multiple line items in one invoice
+
 
 "split" = divide ONE invoice total into N equal parts. Use when:
   - "split [client]'s invoice into N parts"
@@ -102,6 +112,15 @@ DISAMBIGUATION EXAMPLES:
 "Create same invoice as Priya's but for Kartik with no GST" → copy, targetRef="Priya"
 "Make same invoice as Rahul's for Meera" → copy, targetRef="Rahul"
 "Same as Priya's invoice but for Kartik" → copy, targetRef="Priya"
+"Create monthly invoice for Priya for web maintenance ₹15,000/month for 6 months" → multi, estimatedCount=6
+"Monthly retainer for Rahul ₹20,000 for 3 months" → multi, estimatedCount=3
+"Invoice Kartik ₹10,000/month for 4 months" → multi, estimatedCount=4
+"Web maintenance ₹15,000 for next 6 months" → multi, estimatedCount=6
+"Invoice Rahul ₹45,000 for Jan, Feb, March with 18% GST" → multi, estimatedCount=3
+"Bill Priya ₹20,000 for April and June" → multi, estimatedCount=2
+"Invoice Kartik ₹30,000 for Q1 2026" → multi, estimatedCount=3
+"Invoice Rahul ₹50,000 and Priya ₹30,000 for development" → multi, estimatedCount=2
+"Bill Rahul ₹20,000 and Ankit ₹15,000" → multi, estimatedCount=2
 
 Also output:
 - clientName: the DESTINATION client name (e.g. for "copy Rahul's for Priya" → clientName="Priya")

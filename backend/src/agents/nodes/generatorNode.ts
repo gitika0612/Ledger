@@ -18,7 +18,7 @@ export async function generatorNode(
       return {
         agentResult: {
           action: "not_found",
-          message: `I couldn't find the invoice to split. Please specify which invoice to split (e.g. "Split Ankit's ₹1,00,000 invoice into 2 parts").`,
+          message: `I couldn't find the invoice to split. Please specify which invoice to split.`,
         },
       };
     }

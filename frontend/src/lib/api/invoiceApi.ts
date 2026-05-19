@@ -160,3 +160,19 @@ export async function fetchClientHistory(clientName: string, userId: string) {
   );
   return response.data.invoices;
 }
+
+// Fetch most recent invoice for a client (any status)
+export async function fetchLatestClientInvoice(
+  clientName: string,
+  userId: string
+): Promise<ParsedInvoice | null> {
+  try {
+    const response = await api.get(
+      `/invoices/client/${encodeURIComponent(clientName)}/latest`,
+      { params: { userId } }
+    );
+    return response.data ?? null;
+  } catch {
+    return null;
+  }
+}

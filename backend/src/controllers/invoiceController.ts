@@ -456,3 +456,18 @@ export async function getInvoiceById(
     res.status(500).json({ error: "Failed to fetch invoice" });
   }
 }
+
+export async function getLatestClientInvoice(req: Request, res: Response) {
+  const { clientName } = req.params;
+  const { userId } = req.query;
+
+  const invoice = await Invoice.findOne({
+    userId,
+    clientName: { $regex: new RegExp(`^${clientName}$`, "i") },
+  })
+    .sort({ createdAt: -1 }) // most recent regardless of status
+    .lean();
+
+  if (!invoice) return res.status(404).json({ error: "Not found" });
+  res.json(invoice);
+}

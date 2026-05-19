@@ -63,7 +63,7 @@ function findSourceBlock(sessionContext: string, ref: string): string | null {
     }
   }
 
-  if (matching.length > 0) return matching[matching.length - 1]; // most recent
+  if (matching.length > 0) return matching[matching.length - 1];
 
   // Fallback: last block = most recent invoice
   if (!lower || lower === "last" || lower === "last one") {
@@ -71,6 +71,85 @@ function findSourceBlock(sessionContext: string, ref: string): string | null {
     return allBlocks.length > 0 ? allBlocks[allBlocks.length - 1].raw : null;
   }
   return null;
+}
+
+// Parse a session context block into a ParsedInvoice
+// Works because buildSessionContext now includes line items
+function parseBlockToInvoice(block: string): ParsedInvoice | null {
+  const lineItemsMatch = [
+    ...block.matchAll(
+      /-\s*(.+?)\s*\|\s*Qty:\s*([\d.]+)\s*(.+?)\s*\|\s*Rate:\s*₹([\d,]+)\s*\|\s*Amount:\s*₹([\d,]+)/g
+    ),
+  ];
+
+  const lineItems = lineItemsMatch.map((m) => ({
+    description: m[1].trim(),
+    quantity: parseFloat(m[2]),
+    unit: m[3].trim(),
+    rate: parseInt(m[4].replace(/,/g, "")),
+    amount: parseInt(m[5].replace(/,/g, "")),
+    hsnSacCode: "",
+    hsnSacType: "SAC" as const,
+  }));
+
+  const gstMatch = block.match(/GST:\s*([\d.]+)%\s*(\w+)/i);
+  const totalMatch = block.match(/Total:\s*₹?([\d,]+)/i);
+  const subtotalMatch = block.match(/Subtotal:\s*₹?([\d,]+)/i);
+  const termsMatch = block.match(/Payment Terms:\s*(\d+)/i);
+  const clientMatch = block.match(/Client:\s*(.+)/i);
+  const monthMatch = block.match(/Invoice Month:\s*(.+)/i);
+
+  if (!totalMatch) return null;
+
+  const subtotal = parseInt((subtotalMatch?.[1] ?? "0").replace(/,/g, ""));
+  const total = parseInt((totalMatch[1] ?? "0").replace(/,/g, ""));
+  const gstPercent = parseFloat(gstMatch?.[1] ?? "18");
+  const gstType =
+    (gstMatch?.[2] ?? "CGST_SGST") === "IGST"
+      ? ("IGST" as const)
+      : ("CGST_SGST" as const);
+  const gstAmount = total - subtotal;
+
+  return {
+    clientName: clientMatch?.[1]?.trim() ?? "Client",
+    lineItems:
+      lineItems.length > 0
+        ? lineItems
+        : [
+            {
+              description: "Services",
+              quantity: 1,
+              unit: "item",
+              rate: subtotal,
+              amount: subtotal,
+              hsnSacCode: "",
+              hsnSacType: "SAC" as const,
+            },
+          ],
+    gstPercent,
+    gstType,
+    paymentTermsDays: parseInt(termsMatch?.[1] ?? "15"),
+    subtotal,
+    taxableAmount: subtotal,
+    gstAmount,
+    cgstAmount: gstType === "CGST_SGST" ? Math.round(gstAmount / 2) : 0,
+    sgstAmount: gstType === "CGST_SGST" ? Math.round(gstAmount / 2) : 0,
+    igstAmount: gstType === "IGST" ? gstAmount : 0,
+    discountType: "none" as const,
+    discountValue: 0,
+    discountAmount: 0,
+    notes: "",
+    total,
+    invoiceDate: new Date().toISOString().split("T")[0],
+    invoiceMonth:
+      monthMatch?.[1]?.trim() ??
+      new Date().toLocaleDateString("en-IN", {
+        month: "long",
+        year: "numeric",
+      }),
+    changedFields: [],
+    warning: "",
+  } as unknown as ParsedInvoice;
 }
 
 async function fetchLastConfirmedInvoice(
@@ -103,8 +182,6 @@ async function fetchLastConfirmedInvoice(
         ? new Date(last.invoiceDate).toISOString().split("T")[0]
         : new Date().toISOString().split("T")[0],
       invoiceMonth: last.invoiceMonth ?? "",
-      intent: "copy",
-      targetInvoiceRef: "",
       changedFields: [],
       warning: "",
     } as unknown as ParsedInvoice;
@@ -129,14 +206,15 @@ export async function copierNode(
       }))
     )
   );
-  console.log("sessionContext:", state.sessionContext?.substring(0, 500));
+
   const ref = state.targetRef || "";
   const hasSession =
     state.sessionContext &&
     state.sessionContext !== "No existing invoices in this session.";
 
   // ── Multiple matches → ask which one ──
-  if (ref && hasSession) {
+  // Skip ambiguity check for "last" references
+  if (ref && hasSession && ref !== "last" && ref !== "last one") {
     const matches = findMatchingBlocks(state.sessionContext, ref);
     if (matches.length > 1) {
       const list = matches
@@ -160,9 +238,9 @@ export async function copierNode(
   }
 
   // ── Find source invoice ──
-  // Priority 1: full invoice passed from frontend (has all line items)
-  // Priority 2: cross-session → fetch last confirmed from DB
-  // Priority 3: in-session context string (fallback, limited data)
+  // Priority 1: full invoice passed from frontend — most reliable (has all line items)
+  // Priority 2: parse from enriched session context block (buildSessionContext includes line items)
+  // Priority 3: cross-session → fetch last confirmed from DB
   // Priority 4: nothing found
 
   const promptLower = state.prompt.toLowerCase();
@@ -176,10 +254,34 @@ export async function copierNode(
   let sourceInv: ParsedInvoice | null = null;
 
   if (state.parsedInvoice && state.parsedInvoice.clientName) {
-    // Priority 1: full invoice from frontend — most reliable
+    // Priority 1: full invoice from frontend
     sourceInv = state.parsedInvoice;
+    console.log("✅ Priority 1: parsedInvoice from frontend");
+  } else if (hasSession) {
+    // Priority 2: parse from session context block
+    const block = findSourceBlock(state.sessionContext, ref || "last");
+    if (block) {
+      sourceInv = parseBlockToInvoice(block);
+      if (sourceInv) {
+        console.log(
+          "✅ Priority 2: parsed from session context block, client:",
+          sourceInv.clientName
+        );
+      }
+    }
+    if (!sourceInv) {
+      return {
+        agentResult: {
+          action: "not_found",
+          message:
+            ref && ref !== "last"
+              ? `I couldn't find **${ref}** in this session. Please check the invoice number and try again.`
+              : `There are no invoices in this session to copy. Please create an invoice first.`,
+        },
+      };
+    }
   } else if (isCrossSession) {
-    // Priority 2: last confirmed invoice from DB
+    // Priority 3: last confirmed invoice from DB
     sourceInv = await fetchLastConfirmedInvoice(state.userId);
     if (!sourceInv) {
       return {
@@ -189,25 +291,7 @@ export async function copierNode(
         },
       };
     }
-  } else if (hasSession) {
-    // Priority 3: session context string (no line items — will result in empty invoice)
-    const block = findSourceBlock(state.sessionContext, ref || "last");
-    if (!block) {
-      return {
-        agentResult: {
-          action: "not_found",
-          message: `I couldn't find **${ref}** in this session. Please check the invoice number and try again.`,
-        },
-      };
-    }
-    // Can't build a proper ParsedInvoice from a session block (no line items)
-    // This case only happens when frontend failed to pass parsedInvoice
-    return {
-      agentResult: {
-        action: "not_found",
-        message: `Couldn't retrieve full invoice details for **${ref}**. Please try again.`,
-      },
-    };
+    console.log("✅ Priority 3: last confirmed from DB");
   } else {
     return {
       agentResult: {
@@ -219,12 +303,12 @@ export async function copierNode(
 
   // ── Extract new client name from prompt ──
   const namedMatch =
-    state.prompt.match(/named\s+([A-Z][a-zA-Z]+)/i)?.[1] || // "named Meera"
-    state.prompt.match(/but\s+for\s+([A-Z][a-zA-Z]+)/i)?.[1] || // "but for Ankit"
-    state.prompt.match(/for\s+([A-Z][a-zA-Z]{1,}?)(?:\s+with|\s*$|,)/)?.[1] || // "for Rahul"
+    state.prompt.match(/named\s+([A-Z][a-zA-Z]+)/i)?.[1] ||
+    state.prompt.match(/but\s+for\s+([A-Z][a-zA-Z]+)/i)?.[1] ||
+    state.prompt.match(/for\s+([A-Z][a-zA-Z]{1,}?)(?:\s+with|\s*$|,)/)?.[1] ||
     state.prompt.match(
       /for\s+a\s+(?:new\s+)?client\s+(?:named\s+)?([A-Z][a-zA-Z]+)/i
-    )?.[1] || // "for a new client named X"
+    )?.[1] ||
     "";
   const newClientName = namedMatch.trim() || "Client";
 
@@ -235,20 +319,14 @@ export async function copierNode(
 
   const pl = state.prompt.toLowerCase();
 
-  // No GST override
-  if (/no gst|without gst|0% gst|gst exempt/.test(pl)) {
-    gstPercent = 0;
-  }
+  if (/no gst|without gst|0% gst|gst exempt/.test(pl)) gstPercent = 0;
 
-  // Specific GST % override ("with 12% GST")
   const gstPctOverride = pl.match(/with\s+(\d+(?:\.\d+)?)\s*%\s*gst/);
   if (gstPctOverride) gstPercent = parseFloat(gstPctOverride[1]);
 
-  // GST type override
   if (/with igst/.test(pl)) gstType = "IGST";
   if (/with cgst|with cgst.sgst/.test(pl)) gstType = "CGST_SGST";
 
-  // Payment terms override ("30 day terms", "net 45")
   const termOverride = pl.match(/(\d+)\s*day(?:s)?\s+(?:payment\s+)?terms?/);
   const netOverride = pl.match(/net\s+(\d+)/);
   if (termOverride) paymentTermsDays = parseInt(termOverride[1]);
@@ -271,7 +349,6 @@ export async function copierNode(
     discountType: sourceInv.discountType ?? "none",
     discountValue: sourceInv.discountValue ?? 0,
     notes: sourceInv.notes ?? "",
-    // Reset invoice-specific fields
     changedFields: [],
     warning: "",
   });

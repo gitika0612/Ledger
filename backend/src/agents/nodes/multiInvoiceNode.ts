@@ -9,6 +9,7 @@ import {
 import {
   MULTI_INVOICE_PROMPT,
   MULTI_DETECT_PROMPT,
+  GENERATOR_PROMPT,
 } from "../prompts/invoicePrompt";
 import { findClientMatch } from "../../lib/clientMatcher";
 import { buildCurrencyContext } from "../utils/currencyService";
@@ -119,18 +120,70 @@ function monthToDate(monthStr: string): string {
 
 // Extract client name from prompt
 function extractClientName(prompt: string): string {
-  const match =
-    // "Invoice Priya for..." or "Bill Rahul for..."
-    prompt.match(
-      /^(?:invoice|bill|create(?:\s+invoice)?(?:\s+for)?|monthly(?:\s+invoice)?(?:\s+for)?(?:\s+retainer)?(?:\s+for)?)\s+([A-Z][a-zA-Z]+)/i
-    ) ||
-    // "[Name]'s invoice" possessive
-    prompt.match(/([A-Z][a-zA-Z]+)'s\s+(?:[\d,₹]+\s+)?invoice/i) ||
-    // "Divide/Split [Name]'s"
-    prompt.match(/(?:divide|split)\s+([A-Z][a-zA-Z]+)/i) ||
-    // "for [Name]"
-    prompt.match(/\bfor\s+([A-Z][a-zA-Z]+)/i);
-  return match?.[1] ?? "Client";
+  const STOP_WORDS = new Set([
+    "monthly",
+    "weekly",
+    "daily",
+    "annual",
+    "yearly",
+    "invoice",
+    "bill",
+    "services",
+    "maintenance",
+    "retainer",
+    "create",
+    "make",
+    "generate",
+    "new",
+    "next",
+    "each",
+    "january",
+    "february",
+    "march",
+    "april",
+    "may",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december",
+    "jan",
+    "feb",
+    "mar",
+    "apr",
+    "jun",
+    "jul",
+    "aug",
+    "sep",
+    "oct",
+    "nov",
+    "dec",
+  ]);
+
+  // Try "for [Name]" — first capitalized word after "for" that isn't a stop word
+  const forMatches = [...prompt.matchAll(/\bfor\s+([A-Z][a-zA-Z]+)/gi)];
+  for (const m of forMatches) {
+    const name = m[1];
+    if (!STOP_WORDS.has(name.toLowerCase())) return name;
+  }
+
+  // Try "[Name]'s invoice"
+  const possessive = prompt.match(
+    /([A-Z][a-zA-Z]+)'s\s+(?:[\d,₹]+\s+)?invoice/i
+  );
+  if (possessive && !STOP_WORDS.has(possessive[1].toLowerCase())) {
+    return possessive[1];
+  }
+
+  // Try "Invoice/Bill [Name]"
+  const direct = prompt.match(/^(?:invoice|bill)\s+([A-Z][a-zA-Z]+)/i);
+  if (direct && !STOP_WORDS.has(direct[1].toLowerCase())) {
+    return direct[1];
+  }
+
+  return "Client";
 }
 
 export async function multiInvoiceNode(
@@ -196,37 +249,64 @@ export async function multiInvoiceNode(
   const clientName = extractClientName(state.prompt);
   const currencyRates = await buildCurrencyContext();
 
-  // ── Step 4: Generate each invoice with a focused per-invoice prompt ──
+  // ── Step 4: Generate each invoice ──
   const invoiceStructured = model.withStructuredOutput(invoiceSchema);
   const invoiceTemplate = PromptTemplate.fromTemplate(MULTI_INVOICE_PROMPT);
 
   const parsedInvoices: ParsedInvoice[] = [];
 
-  for (let i = 0; i < finalCount; i++) {
-    const invoiceMonth = expectedMonths[i];
-    const invoiceDate = monthToDate(invoiceMonth);
+  // Detect if this is multi-CLIENT (different clients) vs multi-MONTH (same client)
+  // Multi-client: subPrompts have different client names
+  // Multi-month: same client, different months
+  const isMultiClient =
+    detection.subPrompts.length > 1 &&
+    new Set(
+      detection.subPrompts.map((sp) => {
+        const m = sp.match(/Invoice\s+([A-Z][a-z]+)/i);
+        return m?.[1]?.toLowerCase() ?? "";
+      })
+    ).size > 1;
 
-    const formatted = await invoiceTemplate.format({
-      index: String(i + 1),
-      total: String(count),
-      basePrompt: state.prompt,
-      invoiceMonth,
-      invoiceDate,
-      clientName,
-      memoryContext: state.memoryContext,
-    });
-
-    const raw = (await invoiceStructured.invoke(formatted)) as ParsedInvoice;
-    // Force-override month/date regardless of what LLM returned
-    const corrected = recalculateTotals({
-      ...raw,
-      clientName,
-      invoiceMonth,
-      invoiceDate,
-    });
-    parsedInvoices.push(corrected);
+  if (isMultiClient) {
+    // ── Multi-client: generate each invoice directly from its subPrompt ──
+    for (const subPrompt of detection.subPrompts) {
+      const currencyRates = await buildCurrencyContext();
+      const generatorTemplate = PromptTemplate.fromTemplate(GENERATOR_PROMPT);
+      const formatted = await generatorTemplate.format({
+        prompt: subPrompt,
+        memoryContext: state.memoryContext ?? "No past invoice history.",
+        currentMonth,
+        currentDate,
+        currencyRates,
+      });
+      const raw = (await invoiceStructured.invoke(formatted)) as ParsedInvoice;
+      parsedInvoices.push(recalculateTotals(raw));
+    }
+  } else {
+    // ── Multi-month: existing loop unchanged ──
+    for (let i = 0; i < finalCount; i++) {
+      const invoiceMonth = expectedMonths[i];
+      const invoiceDate = monthToDate(invoiceMonth);
+      const formatted = await invoiceTemplate.format({
+        index: String(i + 1),
+        total: String(finalCount),
+        basePrompt: state.prompt,
+        invoiceMonth,
+        invoiceDate,
+        clientName,
+        memoryContext: state.memoryContext,
+      });
+      const raw = (await invoiceStructured.invoke(formatted)) as ParsedInvoice;
+      parsedInvoices.push(
+        recalculateTotals({
+          ...raw,
+          clientName,
+          invoiceMonth,
+          invoiceDate,
+        })
+      );
+    }
   }
-
   // ── Step 5: Client match ──
   const invoicesWithMatch = await Promise.all(
     parsedInvoices.map(async (invoice) => {
@@ -239,11 +319,19 @@ export async function multiInvoiceNode(
 
   // ── Step 6: Summary message ──
   const totalSum = parsedInvoices.reduce((sum, inv) => sum + inv.total, 0);
-  const monthList = expectedMonths.join(", ");
+  const summaryLabel = isMultiClient
+    ? parsedInvoices
+        .map(
+          (inv) => `**${inv.clientName}** ₹${inv.total.toLocaleString("en-IN")}`
+        )
+        .join(", ")
+    : `**${clientName}** (${expectedMonths.join(", ")})`;
 
   const result: AgentResult = {
     action: "multi_created",
-    message: `Done! Prepared **${finalCount} invoices** for **${clientName}** (${monthList}).\n\nTotal value: **${formatINR(
+    message: `Done! Prepared **${
+      parsedInvoices.length
+    } invoices** for ${summaryLabel}.\n\nTotal value: **${formatINR(
       totalSum
     )}**\n\nReview each invoice in the side panel.`,
     invoices: parsedInvoices,

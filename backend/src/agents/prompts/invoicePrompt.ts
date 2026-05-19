@@ -292,4 +292,11 @@ Prompt: "Create 3 invoices for Kartik for Q1 2026 ₹30,000 each"
 Prompt: "Invoice Rahul for logo design ₹20,000, brand guidelines ₹15,000, 3 revisions ₹5,000"
 → isMultiple: false, count: 1, subPrompts: []
 
+Prompt: "Invoice Rahul ₹50,000 and Priya ₹30,000 for development"
+→ isMultiple: true, count: 2
+→ subPrompts: [
+    "Invoice Rahul for development ₹50,000 with 18% GST, payment terms 15 days",
+    "Invoice Priya for development ₹30,000 with 18% GST, payment terms 15 days"
+  ]
+
 Original prompt: {prompt}`;

@@ -9,6 +9,7 @@ import {
   fetchInvoiceById,
   fetchClientHistory,
   AgentResult,
+  fetchLatestClientInvoice,
 } from "@/lib/api/invoiceApi";
 import { parseClientDetailsFromText, ClientAPI } from "@/lib/api/clientApi";
 import { ParsedInvoice } from "@/components/invoice/InvoicePreviewCard";
@@ -905,8 +906,6 @@ export function useInvoiceChat() {
       let currentInvoice: ParsedInvoice | null = null;
 
       // ── Copy source detection ──
-      // Extract SOURCE client (Priya in "same as Priya's but for Kartik")
-      // If m.length > 1 → leave currentInvoice null → copierNode will ask which one
       if (isCopyPrompt) {
         const sourceClientMatch =
           prompt.match(/same\s+(?:invoice\s+)?as\s+([A-Z][a-z]+)/i)?.[1] ||
@@ -914,6 +913,7 @@ export function useInvoiceChat() {
           prompt.match(/([A-Z][a-z]+)(?:'s)?\s+invoice\s+for/i)?.[1];
 
         if (sourceClientMatch) {
+          // Named client source — find in session
           const m = findMatchingInvoices(
             sessionInvoicesRef.current,
             sourceClientMatch
@@ -922,11 +922,27 @@ export function useInvoiceChat() {
             currentInvoice = m[0].invoice;
           }
           // m.length > 1 → don't set → copierNode ambiguity check fires
+        } else {
+          // ── "last one" / "last invoice" / "same as last" fallback ──
+          const pl = prompt.toLowerCase();
+          const isLastRef =
+            pl.includes("last one") ||
+            pl.includes("last invoice") ||
+            pl.includes("previous invoice") ||
+            pl.includes("same as last");
+
+          if (isLastRef && sessionInvoicesRef.current.length > 0) {
+            // Use most recent session invoice as source
+            currentInvoice =
+              sessionInvoicesRef.current[sessionInvoicesRef.current.length - 1]
+                .invoice;
+          }
+          // If isLastRef but sessionInvoicesRef is empty (race condition or new chat),
+          // copierNode Priority 2 will parse from sessionContext string
         }
       }
 
       // ── Memory context — skipped for copy prompts ──
-      // Copy source invoice is the context; fetching client history causes pollution
       let memoryContext = "No past invoice history for this client.";
 
       if (!isCopyPrompt) {
@@ -962,12 +978,11 @@ export function useInvoiceChat() {
       }
 
       // ── Edit intent: find which invoice to edit ──
-      // Only runs if copy detection didn't already set currentInvoice
       if (looksLikeEdit && !currentInvoice) {
         const promptLower = prompt.toLowerCase();
         const sessions = sessionInvoicesRef.current;
 
-        // 1. Explicit invoice number (e.g. "Add GST to INV-2026-047")
+        // 1. Explicit invoice number
         const invNumMatch = prompt.match(/INV-[0-9]{4}-[0-9]{3,}/i);
         const invNumInPrompt = invNumMatch ? invNumMatch[0] : "";
         if (invNumInPrompt) {
@@ -987,7 +1002,7 @@ export function useInvoiceChat() {
             currentInvoice = sessions[sessions.length - 1].invoice;
         }
 
-        // 3. Named client (e.g. "Add GST to Priya's invoice")
+        // 3. Named client
         if (!currentInvoice) {
           const clientRefArr = prompt.match(
             /(?:to|in|for|on)\s+([A-Z][a-z]+)(?:'s)?\s+invoice/i
@@ -1021,11 +1036,15 @@ export function useInvoiceChat() {
         promptLower2.includes("equal part")
       ) {
         const sessions2 = sessionInvoicesRef.current;
+
+        // 1. Explicit invoice number
         const invNumArr = prompt.match(/INV-[0-9]{4}-[0-9]{3,}/i);
         if (invNumArr) {
           const m = findMatchingInvoices(sessions2, invNumArr[0]);
           if (m.length > 0) splitInvoice = m[0].invoice;
         }
+
+        // 2. Named client in session
         if (!splitInvoice) {
           const cArr = prompt.match(
             /([A-Z][a-z]+)(?:'s)? (?:[^\s]+ )?invoice/i
@@ -1035,13 +1054,37 @@ export function useInvoiceChat() {
             if (m.length > 0) splitInvoice = m[m.length - 1].invoice;
           }
         }
+
+        // 3. Selected panel invoice
         if (!splitInvoice && selectedPanelMessageId) {
           splitInvoice =
             sessions2.find((s) => s.messageId === selectedPanelMessageId)
               ?.invoice ?? null;
         }
+
+        // 4. Most recent session invoice
         if (!splitInvoice && sessions2.length > 0) {
           splitInvoice = sessions2[sessions2.length - 1].invoice;
+        }
+
+        // 5. Cross-session fallback — fetch most recent from DB (any status)
+        if (!splitInvoice || sessions2.length === 0) {
+          const clientMatch =
+            prompt.match(/([A-Z][a-z]+)(?:'s)/i)?.[1] ||
+            prompt.match(/\bfor\s+([A-Z][a-z]+)/i)?.[1];
+          if (clientMatch) {
+            try {
+              const latest = await fetchLatestClientInvoice(
+                clientMatch,
+                user.id
+              );
+              if (latest) {
+                splitInvoice = latest as ParsedInvoice;
+              }
+            } catch {
+              // Fall through to generatorNode which will parse from prompt
+            }
+          }
         }
       }
 
