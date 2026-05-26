@@ -10,6 +10,7 @@ export interface SendInvoiceEmailParams {
   total: number;
   dueDate: Date;
   pdfBuffer: Buffer;
+  invoiceId: string;
 }
 
 function formatINR(amount: number): string {
@@ -39,8 +40,10 @@ export async function sendInvoiceEmail(
     total,
     dueDate,
     pdfBuffer,
+    invoiceId,
   } = params;
 
+  const paymentLink = `${process.env.FRONTEND_URL}/pay/${invoiceId}`;
   const dueDateStr = formatDate(dueDate);
   const totalStr = formatINR(total);
 
@@ -55,21 +58,21 @@ export async function sendInvoiceEmail(
           <meta charset="utf-8" />
           <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         </head>
-        <body style="margin:0; padding:0; background:#F9FAFB; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;">
-          <table width="100%" cellpadding="0" cellspacing="0" style="background:#F9FAFB; padding: 40px 16px;">
+        <body style="margin:0; padding:0; background:#f4f4f0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f0; padding: 40px 16px;">
             <tr>
               <td align="center">
                 <table width="560" cellpadding="0" cellspacing="0" style="max-width:560px; width:100%;">
 
-                  <!-- Logo / Brand -->
+                  <!-- Logo -->
                   <tr>
                     <td style="padding-bottom: 24px; text-align: center;">
                       <table cellpadding="0" cellspacing="0" style="margin: 0 auto;">
                         <tr>
-                          <td style="background:#4F46E5; width:32px; height:32px; border-radius:8px; text-align:center; vertical-align:middle;">
-                            <span style="color:white; font-size:18px; font-weight:bold; line-height:32px;">⚡</span>
+                          <td style="background:#1a1a1a; width:30px; height:30px; border-radius:7px; text-align:center; vertical-align:middle;">
+                            <span style="color:white; font-size:16px; line-height:30px;">⚡</span>
                           </td>
-                          <td style="padding-left:8px; font-size:18px; font-weight:700; color:#111827;">
+                          <td style="padding-left:8px; font-size:17px; font-weight:700; color:#1a1a1a; letter-spacing:-0.3px;">
                             Ledger
                           </td>
                         </tr>
@@ -77,63 +80,115 @@ export async function sendInvoiceEmail(
                     </td>
                   </tr>
 
-                  <!-- Card -->
+                  <!-- Main card -->
                   <tr>
-                    <td style="background:#ffffff; border-radius:16px; border:1px solid #E5E7EB; overflow:hidden;">
+                    <td style="background:#ffffff; border-radius:16px; border:1px solid #e8e8e4; overflow:hidden;">
 
-                      <!-- Indigo top bar -->
+                      <!-- Dark header -->
                       <tr>
-                        <td style="background:#4F46E5; height:4px;"></td>
+                        <td style="background:#1a1a1a; padding:28px 36px;">
+                          <table width="100%" cellpadding="0" cellspacing="0">
+                            <tr>
+                              <td>
+                                <span style="font-size:11px; color:#888; text-transform:uppercase; letter-spacing:0.07em;">Invoice</span><br/>
+                                <span style="font-size:20px; font-weight:700; color:#ffffff; letter-spacing:-0.4px;">${invoiceNumber}</span>
+                              </td>
+                              <td align="right">
+                                <span style="font-size:11px; color:#888; text-transform:uppercase; letter-spacing:0.07em;">Amount due</span><br/>
+                                <span style="font-size:26px; font-weight:700; color:#ffffff; letter-spacing:-0.8px;">${totalStr}</span>
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
                       </tr>
 
                       <!-- Body -->
                       <tr>
-                        <td style="padding: 36px 40px 32px;">
+                        <td style="padding: 32px 36px 28px;">
 
-                          <p style="margin:0 0 8px; font-size:14px; color:#6B7280;">
-                            Hi ${toName},
+                          <p style="margin:0 0 6px; font-size:14px; color:#6b7280;">Hi ${toName},</p>
+                          <p style="margin:0 0 28px; font-size:15px; color:#374151; line-height:1.6;">
+                            <strong>${fromName}</strong> has sent you an invoice. 
+                            Please review and pay by <strong>${dueDateStr}</strong>.
                           </p>
-                          <h1 style="margin:0 0 24px; font-size:22px; font-weight:700; color:#111827;">
-                            You have a new invoice
-                          </h1>
 
-                          <!-- Invoice details box -->
+                          <!-- Invoice detail rows -->
                           <table width="100%" cellpadding="0" cellspacing="0"
-                            style="background:#F9FAFB; border-radius:10px; padding:20px; margin-bottom:28px;">
+                            style="background:#f9fafb; border:1px solid #e8e8e4; border-radius:12px; margin-bottom:28px;">
                             <tr>
-                              <td style="padding-bottom:12px;">
-                                <span style="font-size:11px; font-weight:600; color:#9CA3AF; text-transform:uppercase; letter-spacing:0.05em;">
-                                  Invoice Number
-                                </span><br/>
-                                <span style="font-size:15px; font-weight:700; color:#111827;">
-                                  ${invoiceNumber}
-                                </span>
+                              <td style="padding:16px 20px; border-bottom:1px solid #f0f0ec;">
+                                <table width="100%" cellpadding="0" cellspacing="0">
+                                  <tr>
+                                    <td style="font-size:13px; color:#9ca3af;">Invoice number</td>
+                                    <td align="right" style="font-size:13px; font-weight:600; color:#374151;">${invoiceNumber}</td>
+                                  </tr>
+                                </table>
                               </td>
                             </tr>
                             <tr>
-                              <td style="border-top:1px solid #E5E7EB; padding-top:12px; padding-bottom:12px;">
-                                <span style="font-size:11px; font-weight:600; color:#9CA3AF; text-transform:uppercase; letter-spacing:0.05em;">
-                                  Amount Due
-                                </span><br/>
-                                <span style="font-size:22px; font-weight:700; color:#4F46E5;">
-                                  ${totalStr}
-                                </span>
+                              <td style="padding:16px 20px; border-bottom:1px solid #f0f0ec;">
+                                <table width="100%" cellpadding="0" cellspacing="0">
+                                  <tr>
+                                    <td style="font-size:13px; color:#9ca3af;">From</td>
+                                    <td align="right" style="font-size:13px; font-weight:600; color:#374151;">${fromName}</td>
+                                  </tr>
+                                </table>
                               </td>
                             </tr>
                             <tr>
-                              <td style="border-top:1px solid #E5E7EB; padding-top:12px;">
-                                <span style="font-size:11px; font-weight:600; color:#9CA3AF; text-transform:uppercase; letter-spacing:0.05em;">
-                                  Due Date
-                                </span><br/>
-                                <span style="font-size:14px; font-weight:600; color:#111827;">
-                                  ${dueDateStr}
+                              <td style="padding:16px 20px; border-bottom:1px solid #e5e7eb;">
+                                <table width="100%" cellpadding="0" cellspacing="0">
+                                  <tr>
+                                    <td style="font-size:13px; color:#9ca3af;">Due date</td>
+                                    <td align="right" style="font-size:13px; font-weight:600; color:#374151;">${dueDateStr}</td>
+                                  </tr>
+                                </table>
+                              </td>
+                            </tr>
+                            <tr>
+                              <td style="padding:18px 20px;">
+                                <table width="100%" cellpadding="0" cellspacing="0">
+                                  <tr>
+                                    <td style="font-size:15px; font-weight:700; color:#111;">Total due</td>
+                                    <td align="right" style="font-size:20px; font-weight:700; color:#111; letter-spacing:-0.4px;">${totalStr}</td>
+                                  </tr>
+                                </table>
+                              </td>
+                            </tr>
+                          </table>
+
+                          <!-- Pay Now CTA -->
+                          <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:16px;">
+                            <tr>
+                              <td align="center">
+                                <a href="${paymentLink}"
+                                   style="display:inline-block; background:#4F46E5; color:#ffffff; font-size:15px; font-weight:600; text-decoration:none; padding:14px 44px; border-radius:10px; letter-spacing:-0.2px;">
+                                  Pay ${totalStr} Online
+                                </a>
+                              </td>
+                            </tr>
+                            <tr>
+                              <td align="center" style="padding-top:10px;">
+                                <span style="font-size:12px; color:#9ca3af;">
+                                  🔒 Secure payment · Powered by Stripe
                                 </span>
                               </td>
                             </tr>
                           </table>
 
-                          <p style="margin:0 0 28px; font-size:14px; color:#6B7280; line-height:1.6;">
-                            Please find the invoice PDF attached to this email.
+                          <!-- Fallback link -->
+                          <p style="margin:0 0 28px; font-size:12px; color:#9ca3af; text-align:center; line-height:1.6;">
+                            Can't click the button? Copy this link:<br/>
+                            <a href="${paymentLink}" style="color:#4F46E5; text-decoration:none; word-break:break-all;">
+                              ${paymentLink}
+                            </a>
+                          </p>
+
+                          <hr style="border:none; border-top:1px solid #f0f0ec; margin:0 0 24px;" />
+
+                          <!-- PDF note -->
+                          <p style="margin:0 0 20px; font-size:13px; color:#9ca3af; line-height:1.6;">
+                            The invoice PDF is also attached to this email for your records. 
                             If you have any questions, simply reply to this email.
                           </p>
 
@@ -145,11 +200,11 @@ export async function sendInvoiceEmail(
                         </td>
                       </tr>
 
-                      <!-- Footer inside card -->
+                      <!-- Footer -->
                       <tr>
-                        <td style="background:#F9FAFB; border-top:1px solid #E5E7EB; padding:16px 40px; text-align:center;">
-                          <p style="margin:0; font-size:11px; color:#9CA3AF;">
-                            Sent via <strong>Ledger</strong> · Invoice ${invoiceNumber}
+                        <td style="background:#f9fafb; border-top:1px solid #f0f0ec; padding:16px 36px; text-align:center;">
+                          <p style="margin:0; font-size:11px; color:#9ca3af;">
+                            Sent via <strong style="color:#6b7280;">Ledger</strong> · ledgerbrain.vercel.app
                           </p>
                         </td>
                       </tr>
@@ -157,10 +212,10 @@ export async function sendInvoiceEmail(
                     </td>
                   </tr>
 
-                  <!-- Bottom caption -->
+                  <!-- Bottom note -->
                   <tr>
                     <td style="padding-top:20px; text-align:center;">
-                      <p style="margin:0; font-size:11px; color:#9CA3AF;">
+                      <p style="margin:0; font-size:11px; color:#9ca3af;">
                         This email was sent by ${fromName} using Ledger.
                       </p>
                     </td>

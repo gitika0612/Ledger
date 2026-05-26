@@ -29,6 +29,7 @@ export function CreateInvoicePage() {
     handleDiscardFromPanel,
     handleEditFromPanel,
     setSelectedPanelMessageId,
+    setSessionInvoices,
     scrollToMessage,
   } = useInvoiceChat();
 
@@ -119,6 +120,13 @@ export function CreateInvoicePage() {
         onSelect={(messageId) => {
           setSelectedPanelMessageId(messageId);
           if (messageId) scrollToMessage(messageId);
+        }}
+        onSend={(messageId) => {
+          setSessionInvoices((prev) =>
+            prev.map((s) =>
+              s.messageId === messageId ? { ...s, status: "sent" } : s
+            )
+          );
         }}
         userName={user?.fullName || user?.firstName || "Ledger User"}
       />

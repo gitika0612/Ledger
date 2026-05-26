@@ -58,6 +58,7 @@ interface InvoicePreviewCardProps {
   onConfirm: (invoice: ParsedInvoice) => void;
   onEdit: (invoice: ParsedInvoice) => void;
   onDiscard: () => void;
+  onSend?: () => void;
   status: "draft" | "confirmed" | "sent" | "paid" | "overdue";
   invoiceNumber?: string;
   invoiceId?: string;
@@ -313,6 +314,7 @@ export function InvoicePreviewCard({
   onConfirm,
   onEdit,
   onDiscard,
+  onSend,
   status,
   invoiceNumber,
   invoiceId,
@@ -1415,13 +1417,16 @@ export function InvoicePreviewCard({
               >
                 <Edit2 className="w-4 h-4" />
               </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="rounded-xl border border-gray-200 h-10 w-10"
-              >
-                <Send className="w-4 h-4" />
-              </Button>
+              {onSend && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={onSend}
+                  className="rounded-xl border border-gray-200 h-10 w-10"
+                >
+                  <Send className="w-4 h-4" />
+                </Button>
+              )}
               <Button
                 variant="ghost"
                 size="icon"

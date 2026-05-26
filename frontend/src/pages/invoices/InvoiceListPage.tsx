@@ -162,7 +162,7 @@ function matchesTab(inv: Invoice, tab: FilterTab): boolean {
   return inv.status === tab;
 }
 
-const COL_WIDTHS = "grid-cols-[160px_1fr_120px_120px_120px_110px_48px]";
+const COL_WIDTHS = "grid-cols-[160px_1fr_140px_140px_120px_110px_48px]";
 
 export function InvoiceListPage() {
   const navigate = useNavigate();
@@ -510,14 +510,14 @@ export function InvoiceListPage() {
 
                       {/* Date */}
                       <div className="px-6 py-4">
-                        <span className="text-sm text-gray-500">
+                        <span className="text-sm text-gray-500 whitespace-nowrap">
                           {formatDate(inv.createdAt)}
                         </span>
                       </div>
 
                       {/* Due date */}
                       <div className="px-6 py-4">
-                        <span className="text-sm text-gray-500">
+                        <span className="text-sm text-gray-500 whitespace-nowrap">
                           {inv.dueDate ? formatDate(inv.dueDate) : "—"}
                         </span>
                       </div>

@@ -89,6 +89,7 @@ export async function sendInvoice(req: Request, res: Response): Promise<void> {
       total: invoice.total,
       dueDate: invoice.dueDate,
       pdfBuffer,
+      invoiceId: id,
     });
 
     // ── 6. Update invoice status ──
