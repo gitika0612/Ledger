@@ -14,6 +14,7 @@ import {
   Trash2,
   Edit2,
   CheckCircle,
+  Copy,
 } from "lucide-react";
 import { downloadInvoicePDF } from "@/lib/downloadPDF";
 import {
@@ -574,7 +575,7 @@ export function InvoiceListPage() {
                           {openMenuId === inv._id && (
                             <div
                               ref={menuRef}
-                              className={`absolute right-0 z-50 bg-white rounded-2xl border border-gray-100 py-1.5 w-44 ${
+                              className={`absolute right-0 z-50 bg-white rounded-2xl border border-gray-100 py-1.5 ${
                                 menuFlip[inv._id] ? "bottom-8" : "top-8"
                               }`}
                               style={{
@@ -617,6 +618,23 @@ export function InvoiceListPage() {
                                     Confirm Invoice
                                   </Button>
                                 </div>
+                              )}
+
+                              {(inv.status === "sent" ||
+                                inv.status === "overdue") && (
+                                <Button
+                                  variant="ghost"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    const link = `${window.location.origin}/pay/${inv._id}`;
+                                    navigator.clipboard.writeText(link);
+                                    toast.success("Payment link copied!");
+                                  }}
+                                  className="w-full justify-start gap-3 px-4 py-2.5 h-auto rounded-none text-sm text-gray-700"
+                                >
+                                  <Copy className="w-4 h-4 text-gray-700" />
+                                  Copy Payment Link
+                                </Button>
                               )}
 
                               <div onClick={(e) => e.stopPropagation()}>

@@ -9,6 +9,8 @@ import { InvoiceViewPage } from "./pages/invoices/InvoiceViewPage";
 import { ProfilePage } from "./pages/ProfilePage";
 import { OnboardingPage } from "./pages/OnboardingPage";
 import { Toaster } from "sonner";
+import { PaymentPage } from "./pages/payment/PaymentPage";
+import { PaymentSuccessPage } from "./pages/payment/PaymentSuccessPage";
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => (
   <>
@@ -76,6 +78,9 @@ export default function App() {
             </ProtectedRoute>
           }
         />
+
+        <Route path="/pay/:id" element={<PaymentPage />} />
+        <Route path="/pay/:id/success" element={<PaymentSuccessPage />} />
       </Routes>
     </>
   );

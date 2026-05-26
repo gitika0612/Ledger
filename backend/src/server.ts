@@ -7,6 +7,7 @@ import userRoutes from "./routes/users";
 import invoiceRoutes from "./routes/invoices";
 import chatRoutes from "./routes/chats";
 import clientRoutes from "./routes/clients";
+import paymentRoutes from "./routes/paymentRoutes";
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -27,8 +28,14 @@ app.use(
 );
 
 app.use(
+  "/api/payments/webhook",
+  express.raw({ type: "application/json" }),
+  paymentRoutes
+);
+
+app.use(
   cors({
-    origin: ["http://localhost:5173", "https://invoice-os-sigma.vercel.app"],
+    origin: ["http://localhost:5173", "https://ledgerbrain.vercel.app"],
     credentials: true,
   })
 );
@@ -39,6 +46,7 @@ app.use("/api/users", userRoutes);
 app.use("/api/invoices", invoiceRoutes);
 app.use("/api/chats", chatRoutes);
 app.use("/api/clients", clientRoutes);
+app.use("/api/payments", paymentRoutes);
 
 app.get("/api/health", (_req, res) => {
   res.json({

@@ -7,6 +7,7 @@ CURRENT MONTH: {currentMonth}
 ━━━ EXCHANGE RATES ━━━
 {currencyRates}
 Convert all foreign currency to INR. "k"=×1000. "lakh"=×100000.
+IMPORTANT: ₹1 means ONE rupee. ₹100 means one hundred rupees. Only multiply if "k" or "lakh" is explicitly written.
 
 ━━━ CLIENT HISTORY ━━━
 {memoryContext}

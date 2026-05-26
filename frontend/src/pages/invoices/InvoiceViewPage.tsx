@@ -5,7 +5,6 @@ import {
   ArrowLeft,
   Edit2,
   Download,
-  Send,
   Mail,
   Copy,
   Zap,
@@ -107,47 +106,6 @@ function getDaysUntilDue(dueDate: string) {
   const now = new Date();
   const diff = due.setHours(0, 0, 0, 0) - now.setHours(0, 0, 0, 0);
   return Math.ceil(diff / (1000 * 60 * 60 * 24));
-}
-
-function getInvoicePermissions(
-  status: "draft" | "confirmed" | "sent" | "paid" | "overdue"
-) {
-  switch (status) {
-    case "draft":
-      return {
-        canEdit: true,
-        canSend: false,
-        reason: "Draft must be confirmed before sending",
-      };
-
-    case "confirmed":
-      return {
-        canEdit: true,
-        canSend: true,
-      };
-
-    case "sent":
-      return {
-        canEdit: false,
-        canSend: false,
-        reason: "Invoice already sent",
-      };
-
-    case "paid":
-      return {
-        canEdit: false,
-        canSend: false,
-        reason: "Paid invoices are locked",
-      };
-
-    case "overdue":
-      return {
-        canEdit: false,
-        canSend: false,
-        canRemind: true,
-        reason: "Overdue invoice — send reminder instead",
-      };
-  }
 }
 
 export function InvoiceViewPage() {
@@ -267,7 +225,6 @@ export function InvoiceViewPage() {
   const daysUntilDue = invoice.dueDate
     ? getDaysUntilDue(invoice.dueDate)
     : null;
-  const perms = getInvoicePermissions(invoice.status);
 
   const hasDiscount =
     invoice.discountType &&
@@ -298,42 +255,6 @@ export function InvoiceViewPage() {
               <span className="font-semibold text-gray-900">Ledger</span>
             </div>
           </div>
-
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              disabled={!perms.canSend}
-              title={!perms.canSend ? perms.reason : ""}
-              onClick={perms.canSend ? () => setShowSendModal(true) : undefined}
-              className={`gap-2 rounded-xl ${
-                !perms.canSend ? "opacity-50 cursor-not-allowed" : ""
-              }`}
-            >
-              <Send className="w-4 h-4" />
-              Send
-            </Button>
-
-            <Button
-              variant="outline"
-              disabled={!perms.canEdit}
-              title={!perms.canEdit ? perms.reason : ""}
-              onClick={perms.canEdit ? () => setEditing(true) : undefined}
-              className={`gap-2 rounded-xl ${
-                !perms.canEdit ? "opacity-50 cursor-not-allowed" : ""
-              }`}
-            >
-              <Edit2 className="w-4 h-4" />
-              Edit
-            </Button>
-            <Button
-              onClick={handleDownload}
-              className="gap-2 rounded-xl bg-indigo-600 hover:bg-indigo-700"
-              style={{ boxShadow: "0 4px 12px rgba(79,70,229,0.3)" }}
-            >
-              <Download className="w-4 h-4" />
-              Download PDF
-            </Button>
-          </div>
         </div>
       </header>
 
@@ -345,7 +266,6 @@ export function InvoiceViewPage() {
               {invoice.invoiceNumber}
             </h1>
             <Badge className={`gap-1.5 rounded-full ${status.class}`}>
-              <span className={`w-1.5 h-1.5 rounded-full ${status.dot}`} />
               {status.label}
             </Badge>
           </div>
@@ -707,6 +627,7 @@ export function InvoiceViewPage() {
                 Actions
               </p>
               <div className="space-y-2">
+                {/* Confirm — only on draft */}
                 {invoice.status === "draft" && (
                   <Button
                     variant="outline"
@@ -717,6 +638,8 @@ export function InvoiceViewPage() {
                     Confirm Invoice
                   </Button>
                 )}
+
+                {/* Download PDF — always visible */}
                 <Button
                   variant="outline"
                   onClick={handleDownload}
@@ -725,38 +648,46 @@ export function InvoiceViewPage() {
                   <Download className="w-4 h-4 text-gray-400" />
                   Download PDF
                 </Button>
-                <Button
-                  variant="outline"
-                  disabled={!perms.canSend}
-                  title={!perms.canSend ? perms.reason : ""}
-                  onClick={
-                    perms.canSend ? () => setShowSendModal(true) : undefined
-                  }
-                  className={`w-full justify-start gap-3 rounded-xl ${
-                    !perms.canSend ? "text-gray-300 cursor-not-allowed" : ""
-                  }`}
-                >
-                  <Mail className="w-4 h-4 text-gray-400" />
-                  {invoice.status === "draft" ? "Send Invoice" : "Email Client"}
-                </Button>
-                <Button
-                  variant="outline"
-                  disabled
-                  title="Payment gateway coming soon"
-                  className="w-full justify-start gap-3 rounded-xl text-gray-300 border-gray-100"
-                >
-                  <Copy className="w-4 h-4" />
-                  Copy Payment Link
-                </Button>
-              </div>
-              <div className="mt-3 p-3 bg-gray-50 rounded-xl">
-                <p className="text-xs text-gray-400 leading-relaxed">
-                  <span className="font-medium text-gray-500">
-                    Payment Link
-                  </span>{" "}
-                  — a shareable URL your client clicks to pay online. Requires
-                  payment gateway setup.
-                </p>
+
+                {/* Edit — only on draft and confirmed */}
+                {["draft", "confirmed"].includes(invoice.status) && (
+                  <Button
+                    variant="outline"
+                    onClick={() => setEditing(true)}
+                    className="w-full justify-start gap-3 rounded-xl"
+                  >
+                    <Edit2 className="w-4 h-4 text-gray-400" />
+                    Edit Invoice
+                  </Button>
+                )}
+
+                {/* Send — only on confirmed */}
+                {invoice.status === "confirmed" && (
+                  <Button
+                    variant="outline"
+                    onClick={() => setShowSendModal(true)}
+                    className="w-full justify-start gap-3 rounded-xl"
+                  >
+                    <Mail className="w-4 h-4 text-gray-400" />
+                    Send Invoice
+                  </Button>
+                )}
+
+                {/* Copy payment link — only on sent and overdue */}
+                {["sent", "overdue"].includes(invoice.status) && (
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      const link = `${window.location.origin}/pay/${invoice._id}`;
+                      navigator.clipboard.writeText(link);
+                      toast.success("Payment link copied!");
+                    }}
+                    className="w-full justify-start gap-3 rounded-xl"
+                  >
+                    <Copy className="w-4 h-4 text-gray-400" />
+                    Copy Payment Link
+                  </Button>
+                )}
               </div>
             </div>
 
