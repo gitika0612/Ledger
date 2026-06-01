@@ -1,7 +1,7 @@
 import { InvoiceAgentState, AgentResult } from "../state";
 import { ParsedInvoice } from "../schemas/invoiceSchema";
 import { findClientMatch } from "../../lib/clientMatcher";
-import { recalculateTotals, formatINR } from "../utils/invoiceUtils";
+import { recalculateTotals, formatCurrency } from "../utils/invoiceUtils";
 import { Invoice } from "../../models/Invoice";
 
 // Parse session context blocks
@@ -363,7 +363,7 @@ export async function copierNode(
 
   if (matchResult.type === "exact") {
     action = "copied";
-    message = `Copied invoice for **${newClientName}** ✓\n\nUsing their saved details. Total: **${formatINR(
+    message = `Copied invoice for **${newClientName}** ✓\n\nUsing their saved details. Total: **${formatCurrency(
       parsedInvoice.total
     )}** — review it in the side panel.`;
   } else if (matchResult.type === "partial") {
@@ -371,7 +371,7 @@ export async function copierNode(
     message = `I found a saved client named **${matchResult.client?.name}**.\nIs **${newClientName}** the same client? Reply **same** or **different**.`;
   } else {
     action = "needs_client";
-    message = `Copied invoice for **${newClientName}**!\n\nTotal: **${formatINR(
+    message = `Copied invoice for **${newClientName}**!\n\nTotal: **${formatCurrency(
       parsedInvoice.total
     )}**\n\nPlease share their contact details:\n\n**Email** *(required)*\n*(Optional: Address, City, State, Phone, GSTIN)*\n\nOr say **skip**.`;
   }

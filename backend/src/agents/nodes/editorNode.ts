@@ -6,7 +6,7 @@ import { EDITOR_PROMPT } from "../prompts/invoicePrompt";
 import {
   recalculateTotals,
   diffLineItems,
-  formatINR,
+  formatCurrency,
 } from "../utils/invoiceUtils";
 
 const FIELD_LABELS: Record<string, string> = {
@@ -57,7 +57,7 @@ function buildEditMessage(
   return [
     `Updated ${nameRef}.`,
     changeParts.filter(Boolean).join(" · "),
-    `New total: **${formatINR(invoice.total)}**`,
+    `New total: **${formatCurrency(invoice.total, invoice.currency)}**`,
     `Review the updated invoice in the side panel.`,
     warning ? `⚠️ ${warning}` : "",
   ]
@@ -66,16 +66,18 @@ function buildEditMessage(
 }
 
 function formatLineItemsForPrompt(
-  lineItems: ParsedInvoice["lineItems"]
+  lineItems: ParsedInvoice["lineItems"],
+  currency: string
 ): string {
+  const symbol = currency === "USD" ? "$" : currency === "EUR" ? "€" : "₹";
   return lineItems
     .map(
       (item, i) =>
         `${i + 1}. "${item.description}" | Qty: ${item.quantity} ${
           item.unit
-        } | Rate: ₹${item.rate.toLocaleString(
+        } | Rate: ${symbol}${item.rate.toLocaleString(
           "en-IN"
-        )} | Amount: ₹${item.amount.toLocaleString("en-IN")}`
+        )} | Amount: ${symbol}${item.amount.toLocaleString("en-IN")}`
     )
     .join("\n");
 }
@@ -120,6 +122,8 @@ export async function editorNode(
     };
   }
 
+  const currency = existing.currency ?? "INR";
+
   const gstChange = detectGstChange(state.prompt);
   if (gstChange) {
     const updated = recalculateTotals({
@@ -157,7 +161,6 @@ export async function editorNode(
     );
 
     if (remaining.length < existing.lineItems.length) {
-      // Found and removed at least one item
       const updated = recalculateTotals({ ...existing, lineItems: remaining });
       const removedItems = existing.lineItems
         .filter((item) => item.description.toLowerCase().includes(target))
@@ -195,6 +198,7 @@ export async function editorNode(
   const formatted = await template.format({
     prompt: state.prompt,
     clientName: existing.clientName,
+    currency,
     invoiceMonth: existing.invoiceMonth ?? "",
     gstPercent: String(existing.gstPercent),
     gstType: existing.gstType,
@@ -204,7 +208,13 @@ export async function editorNode(
     notes: existing.notes || "",
     subtotal: existing.subtotal.toLocaleString("en-IN"),
     total: existing.total.toLocaleString("en-IN"),
-    lineItems: formatLineItemsForPrompt(existing.lineItems),
+    lineItems: formatLineItemsForPrompt(existing.lineItems, currency),
+    taxInfo:
+      currency === "INR"
+        ? `GST ${existing.gstPercent}% ${existing.gstType}`
+        : `${existing.taxLabel || (currency === "EUR" ? "VAT" : "Tax")} ${
+            existing.taxPercent ?? 0
+          }%`,
   });
 
   const parsedEdit = (await structured.invoke(formatted)) as ParsedInvoice;

@@ -5,6 +5,7 @@ import { generatorNode } from "./nodes/generatorNode";
 import { editorNode } from "./nodes/editorNode";
 import { copierNode } from "./nodes/copierNode";
 import { multiInvoiceNode } from "./nodes/multiInvoiceNode";
+import { pendingReplyNode } from "./nodes/pendingReplyNode";
 import { IInvoiceDocument } from "../models/Invoice";
 import { ParsedInvoice } from "./schemas/invoiceSchema";
 import {
@@ -12,6 +13,7 @@ import {
   MatchResult,
   AgentIntent,
   AgentResult,
+  PendingStateContext,
   initialState,
 } from "./state";
 
@@ -86,15 +88,26 @@ const AgentStateAnnotation = Annotation.Root({
     reducer: (x, y) => y ?? x,
     default: () => null,
   }),
+  // pending state from frontend ──
+  pendingState: Annotation<PendingStateContext | null>({
+    reducer: (x, y) => y ?? x,
+    default: () => null,
+  }),
 });
 
 type AgentState = typeof AgentStateAnnotation.State;
+
+// ── If pendingState is set, skip router and go straight to pendingReplyNode ──
+function routeFromStart(state: AgentState): string {
+  if (state.pendingState) return "pendingReply";
+  return "router";
+}
 
 function routeAfterRouter(state: AgentState): string {
   if (state.isMultiple || state.intent === "multi") return "multiInvoice";
   if (state.intent === "edit") return "editor";
   if (state.intent === "copy") return "copier";
-  return "rag"; // new + default → through RAG first
+  return "rag";
 }
 
 function routeAfterMulti(state: AgentState): string {
@@ -110,7 +123,11 @@ export function createInvoiceAgent() {
     .addNode("editor", editorNode)
     .addNode("copier", copierNode)
     .addNode("multiInvoice", multiInvoiceNode)
-    .addEdge(START, "router")
+    .addNode("pendingReply", pendingReplyNode)
+    .addConditionalEdges(START, routeFromStart, {
+      pendingReply: "pendingReply",
+      router: "router",
+    })
     .addConditionalEdges("router", routeAfterRouter, {
       rag: "rag",
       editor: "editor",
@@ -124,7 +141,8 @@ export function createInvoiceAgent() {
     })
     .addEdge("generator", END)
     .addEdge("editor", END)
-    .addEdge("copier", END);
+    .addEdge("copier", END)
+    .addEdge("pendingReply", END);
 
   return graph.compile();
 }
@@ -144,7 +162,8 @@ export async function runInvoiceAgent(input: {
   sessionId: string;
   sessionContext: string;
   memoryContext?: string;
-  parsedInvoice?: ParsedInvoice | null; // Current invoice for edit context
+  parsedInvoice?: ParsedInvoice | null;
+  pendingState?: PendingStateContext | null;
 }): Promise<AgentState> {
   const agent = getInvoiceAgent();
   const result = await agent.invoke({
@@ -153,6 +172,7 @@ export async function runInvoiceAgent(input: {
     parsedInvoice: input.parsedInvoice || null,
     memoryContext:
       input.memoryContext || "No past invoice history for this client.",
+    pendingState: input.pendingState || null,
   });
   return result as AgentState;
 }

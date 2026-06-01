@@ -17,12 +17,10 @@ export type AgentAction =
   | "multi_created"
   | "needs_client"
   | "ambiguous"
-  | "ambiguous"
   | "not_found"
   | "unclear"
   | "info";
 
-// The unified response from the AI agent
 export interface AgentResult {
   action: AgentAction;
   message: string;
@@ -38,6 +36,8 @@ export interface AgentResult {
     parts: number;
     amountPerPart: number;
   };
+  pendingClientName?: string;
+  rawClientDetails?: string;
 }
 
 export interface SavedDraft {
@@ -49,13 +49,26 @@ export interface SavedDraft {
   _id: string;
 }
 
-// Main AI parse endpoint - now returns AgentResult
+export interface PendingStateContext {
+  status:
+    | "awaiting_client_details"
+    | "awaiting_confirm_same"
+    | "awaiting_client_name"
+    | "awaiting_ambiguity"
+    | "awaiting_edit_ambiguity";
+  clientName?: string;
+  invoice?: ParsedInvoice | null;
+  originalPrompt?: string;
+  matchedClient?: unknown;
+}
+
 export async function parseInvoiceWithAI(
   prompt: string,
   userId?: string,
   sessionContext?: string,
   memoryContext?: string,
-  currentInvoice?: ParsedInvoice | null // For edit context
+  currentInvoice?: ParsedInvoice | null,
+  pendingState?: PendingStateContext | null
 ): Promise<AgentResult> {
   const response = await api.post("/invoices/parse", {
     prompt,
@@ -63,6 +76,7 @@ export async function parseInvoiceWithAI(
     sessionContext,
     memoryContext,
     currentInvoice,
+    pendingState: pendingState || null,
   });
   return response.data as AgentResult;
 }
@@ -80,8 +94,10 @@ export async function saveDraftInvoice(
   const response = await api.post("/invoices/save", {
     userId,
     clientName: invoice.clientName,
+    currency: invoice.currency || "INR",
     lineItems: invoice.lineItems,
     paymentTermsDays: invoice.paymentTermsDays,
+    // INR GST fields
     gstPercent: invoice.gstPercent,
     gstType: invoice.gstType || "CGST_SGST",
     cgstPercent: invoice.cgstPercent,
@@ -91,6 +107,11 @@ export async function saveDraftInvoice(
     sgstAmount: invoice.sgstAmount,
     igstAmount: invoice.igstAmount,
     gstAmount: invoice.gstAmount,
+    // USD/EUR Tax fields
+    taxPercent: invoice.taxPercent || 0,
+    taxAmount: invoice.taxAmount || 0,
+    taxLabel: invoice.taxLabel || "",
+    // Common
     discountType: invoice.discountType || "none",
     discountValue: invoice.discountValue || 0,
     discountAmount: invoice.discountAmount || 0,
@@ -161,7 +182,6 @@ export async function fetchClientHistory(clientName: string, userId: string) {
   return response.data.invoices;
 }
 
-// Fetch most recent invoice for a client (any status)
 export async function fetchLatestClientInvoice(
   clientName: string,
   userId: string

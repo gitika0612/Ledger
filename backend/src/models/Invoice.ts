@@ -26,6 +26,9 @@ export interface IInvoiceDocument extends Document {
   sgstAmount: number;
   igstAmount: number;
   gstAmount: number;
+  taxPercent?: number;
+  taxAmount?: number;
+  taxLabel?: string;
   discountType: "percent" | "amount" | "none";
   discountValue: number;
   discountAmount: number;
@@ -39,6 +42,7 @@ export interface IInvoiceDocument extends Document {
   invoiceDate: Date;
   invoiceMonth: string;
   dueDate: Date;
+  currency?: "INR" | "USD" | "EUR";
   idempotencyKey: string;
   // ── RAG ──
   embedding?: number[];
@@ -65,19 +69,25 @@ const invoiceSchema = new Schema<IInvoiceDocument>(
     clientName: { type: String, required: true, trim: true },
     lineItems: { type: [lineItemSchema], default: [] },
     paymentTermsDays: { type: Number, default: 15 },
-    gstPercent: { type: Number, default: 18 },
+    // ── INR GST fields ──
+    gstPercent: { type: Number, default: 0 },
     gstType: {
       type: String,
       enum: ["IGST", "CGST_SGST"],
       default: "CGST_SGST",
     },
-    cgstPercent: { type: Number, default: 9 },
-    sgstPercent: { type: Number, default: 9 },
+    cgstPercent: { type: Number, default: 0 },
+    sgstPercent: { type: Number, default: 0 },
     igstPercent: { type: Number, default: 0 },
     cgstAmount: { type: Number, default: 0 },
     sgstAmount: { type: Number, default: 0 },
     igstAmount: { type: Number, default: 0 },
     gstAmount: { type: Number, default: 0 },
+    // ── USD/EUR Tax fields ──
+    taxPercent: { type: Number, default: 0 },
+    taxAmount: { type: Number, default: 0 },
+    taxLabel: { type: String, default: "" },
+    // ── Common ──
     discountType: {
       type: String,
       enum: ["percent", "amount", "none"],
@@ -105,6 +115,11 @@ const invoiceSchema = new Schema<IInvoiceDocument>(
     dueDate: {
       type: Date,
       default: () => new Date(Date.now() + 15 * 24 * 60 * 60 * 1000),
+    },
+    currency: {
+      type: String,
+      enum: ["INR", "USD", "EUR"],
+      default: "INR",
     },
     idempotencyKey: {
       type: String,

@@ -36,6 +36,8 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { SendInvoiceModal } from "@/components/invoice/modals/SendInvoiceModel";
 import { getClientByName } from "@/lib/api/clientApi";
 import { toast } from "sonner";
+import { formatCurrency } from "@/lib/currency";
+import { useAuth } from "@/hooks/useAuth";
 
 type InvoiceStatus = "draft" | "confirmed" | "sent" | "paid" | "overdue";
 type FilterTab = "all" | "draft" | "confirmed" | "sent" | "paid" | "overdue";
@@ -44,6 +46,7 @@ interface Invoice {
   _id: string;
   invoiceNumber: string;
   clientName: string;
+  currency?: "INR" | "USD" | "EUR";
   lineItems: LineItem[];
   paymentTermsDays: number;
   gstPercent: number;
@@ -52,6 +55,9 @@ interface Invoice {
   sgstAmount?: number;
   igstAmount?: number;
   gstAmount: number;
+  taxPercent?: number;
+  taxAmount?: number;
+  taxLabel?: string;
   discountType?: "percent" | "amount" | "none";
   discountValue?: number;
   discountAmount?: number;
@@ -144,13 +150,8 @@ function formatDate(dateStr: string) {
     year: "numeric",
   });
 }
-
-function formatINR(amount: number) {
-  return new Intl.NumberFormat("en-IN", {
-    style: "currency",
-    currency: "INR",
-    maximumFractionDigits: 0,
-  }).format(amount);
+function formatINR(amount: number, currency?: "INR" | "USD" | "EUR") {
+  return formatCurrency(amount, currency ?? "INR");
 }
 
 function getAvatarColor(name: string) {
@@ -166,6 +167,7 @@ const COL_WIDTHS = "grid-cols-[160px_1fr_140px_140px_120px_110px_48px]";
 
 export function InvoiceListPage() {
   const navigate = useNavigate();
+  const { getUserProfile } = useAuth();
   const { user, isLoaded } = useUser();
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [loading, setLoading] = useState(true);
@@ -226,6 +228,7 @@ export function InvoiceListPage() {
   const handleDownloadPDF = async (inv: Invoice) => {
     setOpenMenuId(null);
     try {
+      const profile = await getUserProfile();
       await downloadInvoicePDF(
         {
           clientName: inv.clientName,
@@ -237,6 +240,9 @@ export function InvoiceListPage() {
           sgstAmount: inv.sgstAmount,
           igstAmount: inv.igstAmount,
           gstAmount: inv.gstAmount,
+          taxPercent: inv.taxPercent,
+          taxAmount: inv.taxAmount,
+          taxLabel: inv.taxLabel,
           discountType: inv.discountType,
           discountValue: inv.discountValue,
           discountAmount: inv.discountAmount,
@@ -244,9 +250,11 @@ export function InvoiceListPage() {
           notes: inv.notes,
           subtotal: inv.subtotal,
           total: inv.total,
+          currency: inv.currency,
         },
         inv.invoiceNumber,
-        user?.fullName || user?.firstName || "Ledger User"
+        user?.fullName || user?.firstName || "Ledger User",
+        profile
       );
     } catch (err) {
       console.error("PDF download failed:", err);
@@ -525,7 +533,7 @@ export function InvoiceListPage() {
                       {/* Amount */}
                       <div className="px-6 py-4">
                         <span className="text-sm font-semibold text-gray-900">
-                          {formatINR(inv.total)}
+                          {formatINR(inv.total, inv.currency)}
                         </span>
                       </div>
 

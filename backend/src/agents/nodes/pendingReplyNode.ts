@@ -1,0 +1,262 @@
+import { ChatOpenAI } from "@langchain/openai";
+import { InvoiceAgentState, AgentResult } from "../state";
+import { findClientMatch } from "../../lib/clientMatcher";
+import { Client } from "../../models/Client";
+
+const PENDING_REPLY_PROMPT = `You are handling a conversational reply in an invoice chat assistant.
+
+The user was asked for information and has replied. Determine what they mean and return a JSON response.
+
+━━━ CURRENT PENDING STATE ━━━
+Status: {pendingStatus}
+Client Name (what we asked about): {clientName}
+Invoice Total: {invoiceTotal}
+Original Prompt: {originalPrompt}
+
+━━━ USER'S REPLY ━━━
+{reply}
+
+━━━ YOUR TASK ━━━
+Classify the reply into one of these actions:
+
+1. NAME_CORRECTION — user is correcting the client name
+   Signals: "sorry it's X", "name is X", "X not Y", "I meant X", "correct name is X"
+   Return: { "action": "name_correction", "correctedName": "X" }
+
+2. HAS_SAVED_DETAILS — user is asking if we have their details already
+   Signals: "don't you have", "do you have", "already have", "saved details", "use existing", "you should have"
+   Return: { "action": "check_existing" }
+
+3. SKIP — user wants to skip adding details
+   Signals: "skip", "no details", "without details", "proceed", "continue", "later", "just create"
+   Return: { "action": "skip" }
+
+4. SAME_CLIENT — user confirms it's the same client (for awaiting_confirm_same)
+   Signals: "same", "yes", "haan", "confirm", "correct", "that's right", "yep", "y"
+   Return: { "action": "same_client" }
+
+5. DIFFERENT_CLIENT — user says it's a different client (for awaiting_confirm_same)
+   Signals: "different", "no", "nahi", "not same", "new client"
+   Return: { "action": "different_client" }
+
+6. CLIENT_DETAILS — user is providing contact information
+   Signals: contains email address, phone number, address, GSTIN
+   Return: { "action": "client_details", "rawText": "<the full reply>" }
+
+7. NEW_CLIENT_NAME — user is providing the client name (for awaiting_client_name)
+   Signals: any name that doesn't match other patterns
+   Return: { "action": "new_client_name", "name": "<the name>" }
+
+RESPOND WITH ONLY VALID JSON. No explanation.`;
+
+export async function pendingReplyNode(
+  state: InvoiceAgentState
+): Promise<Partial<InvoiceAgentState>> {
+  const { prompt, userId, pendingState } = state;
+
+  if (!pendingState) {
+    return {
+      agentResult: {
+        action: "unclear",
+        message: "Something went wrong. Please try again.",
+      },
+    };
+  }
+
+  const model = new ChatOpenAI({
+    modelName: "gpt-4o-mini",
+    temperature: 0,
+    openAIApiKey: process.env.OPENAI_API_KEY,
+  });
+
+  const formattedPrompt = PENDING_REPLY_PROMPT.replace(
+    "{pendingStatus}",
+    pendingState.status
+  )
+    .replace("{clientName}", pendingState.clientName || "unknown")
+    .replace("{invoiceTotal}", String(pendingState.invoice?.total || 0))
+    .replace("{originalPrompt}", pendingState.originalPrompt || "")
+    .replace("{reply}", prompt);
+
+  let classification: {
+    action: string;
+    correctedName?: string;
+    name?: string;
+    rawText?: string;
+  };
+  try {
+    const response = await model.invoke(formattedPrompt);
+    const text =
+      typeof response.content === "string"
+        ? response.content
+        : JSON.stringify(response.content);
+    classification = JSON.parse(text.replace(/```json|```/g, "").trim());
+  } catch {
+    // Fallback: treat as client details
+    classification = { action: "client_details", rawText: prompt };
+  }
+
+  const invoice = pendingState.invoice || null;
+  const clientName = pendingState.clientName || "";
+
+  // ── Handle each action ──
+
+  if (
+    classification.action === "name_correction" &&
+    classification.correctedName
+  ) {
+    const correctedName = classification.correctedName;
+    const matchResult = userId
+      ? await findClientMatch(userId, correctedName)
+      : { type: "none" as const, client: null, score: 0 };
+
+    const correctedInvoice = invoice
+      ? { ...invoice, clientName: correctedName }
+      : invoice;
+
+    if (matchResult.type === "exact") {
+      return {
+        parsedInvoice: correctedInvoice,
+        matchResult,
+        agentResult: {
+          action: "created",
+          message: `Got it! Using **${matchResult.client?.name}**'s saved details ✓`,
+          invoice: correctedInvoice,
+          matchResult,
+        },
+      };
+    }
+
+    // Client not found — ask for details with corrected name
+    return {
+      parsedInvoice: correctedInvoice,
+      agentResult: {
+        action: "needs_client",
+        message: `Got it! Invoice for **${correctedName}**.\n\nPlease share their contact details:\n\n**Email** *(required)*\n*(Optional: Address, City, State, Phone, GSTIN)*\n\nOr say **skip**.`,
+        invoice: correctedInvoice,
+        matchResult: { type: "none", client: null, score: 0 },
+        pendingClientName: correctedName,
+      } as AgentResult,
+    };
+  }
+
+  if (classification.action === "check_existing") {
+    if (!userId || !clientName) {
+      return {
+        agentResult: {
+          action: "needs_client",
+          message: `I don't have saved details for **${clientName}** yet. Please share their email or say **skip**.`,
+          invoice,
+          matchResult: { type: "none", client: null, score: 0 },
+        },
+      };
+    }
+    const matchResult = await findClientMatch(userId, clientName);
+    if (matchResult.type === "exact") {
+      return {
+        parsedInvoice: invoice,
+        matchResult,
+        agentResult: {
+          action: "created",
+          message: `Yes! Found **${matchResult.client?.name}**'s saved details ✓`,
+          invoice,
+          matchResult,
+        },
+      };
+    }
+    return {
+      agentResult: {
+        action: "needs_client",
+        message: `I don't have saved details for **${clientName}** yet. Please share their email or say **skip**.`,
+        invoice,
+        matchResult: { type: "none", client: null, score: 0 },
+      },
+    };
+  }
+
+  if (classification.action === "skip") {
+    return {
+      parsedInvoice: invoice,
+      agentResult: {
+        action: "created",
+        message: `No problem! Creating invoice without client details.`,
+        invoice,
+        matchResult: { type: "none", client: null, score: 0 },
+      },
+    };
+  }
+
+  if (classification.action === "same_client" && pendingState.matchedClient) {
+    return {
+      parsedInvoice: invoice,
+      agentResult: {
+        action: "created",
+        message: `Got it! Using **${pendingState.matchedClient.name}**'s saved details ✓`,
+        invoice,
+        matchResult: {
+          type: "exact",
+          client: pendingState.matchedClient as any,
+          score: 1,
+        },
+      },
+    };
+  }
+
+  if (classification.action === "different_client") {
+    return {
+      agentResult: {
+        action: "needs_client",
+        message: `Got it! Please share **${clientName}**'s contact details:\n\n**Email** *(required)*\n*(Optional: Address, City, State, Phone, GSTIN)*\n\nOr say **skip**.`,
+        invoice,
+        matchResult: { type: "none", client: null, score: 0 },
+      },
+    };
+  }
+
+  if (classification.action === "new_client_name" && classification.name) {
+    const newName = classification.name;
+    const matchResult = userId
+      ? await findClientMatch(userId, newName)
+      : { type: "none" as const, client: null, score: 0 };
+
+    const updatedInvoice = invoice
+      ? { ...invoice, clientName: newName }
+      : invoice;
+
+    if (matchResult.type === "exact") {
+      return {
+        parsedInvoice: updatedInvoice,
+        matchResult,
+        agentResult: {
+          action: "created",
+          message: `Got it! Using **${matchResult.client?.name}**'s saved details ✓`,
+          invoice: updatedInvoice,
+          matchResult,
+        },
+      };
+    }
+
+    return {
+      parsedInvoice: updatedInvoice,
+      agentResult: {
+        action: "needs_client",
+        message: `Got it! Invoice for **${newName}**.\n\nPlease share their contact details:\n\n**Email** *(required)*\n*(Optional: Address, City, State, Phone, GSTIN)*\n\nOr say **skip**.`,
+        invoice: updatedInvoice,
+        matchResult: { type: "none", client: null, score: 0 },
+        pendingClientName: newName,
+      } as AgentResult,
+    };
+  }
+
+  // Default: client_details — parse contact info
+  return {
+    parsedInvoice: invoice,
+    agentResult: {
+      action: "needs_client",
+      message: "_parse_client_details_", // Frontend handles this specially
+      invoice,
+      matchResult: { type: "none", client: null, score: 0 },
+      rawClientDetails: classification.rawText || prompt,
+    } as AgentResult,
+  };
+}

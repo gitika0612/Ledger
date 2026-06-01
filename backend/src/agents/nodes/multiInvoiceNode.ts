@@ -13,7 +13,7 @@ import {
 } from "../prompts/invoicePrompt";
 import { findClientMatch } from "../../lib/clientMatcher";
 import { buildCurrencyContext } from "../utils/currencyService";
-import { recalculateTotals, formatINR } from "../utils/invoiceUtils";
+import { recalculateTotals, formatCurrency } from "../utils/invoiceUtils";
 
 const MONTH_NAMES = [
   "January",
@@ -59,9 +59,7 @@ function extractExplicitMonths(prompt: string, year: number): string[] {
 
   const lower = prompt.toLowerCase();
 
-  // Step 1: Build skip set — find everything after "skip"/"except"/"excluding"
   const skipSet = new Set<number>();
-  // Use greedy match and stop at closing paren, period, or end
   const skipRegex =
     /\b(?:skip|except|not\s+includ\w*|exclud\w*)\b\s+([\w\s,]+?)(?:[).!?]|$)/gi;
   let skipMatch;
@@ -72,9 +70,7 @@ function extractExplicitMonths(prompt: string, year: number): string[] {
     }
   }
 
-  // Step 2: Extract included months in ORDER they appear, excluding skipped ones
   const found: number[] = [];
-  // Split on non-alpha characters but preserve order
   const parts = lower.split(/[\s,()!?]+/);
   for (const part of parts) {
     const clean = part.replace(/[^a-z]/g, "");
@@ -109,7 +105,6 @@ function generateConsecutiveMonths(
 }
 
 function monthToDate(monthStr: string): string {
-  // "April 2026" → "2026-04-01"
   const [monthName, yearStr] = monthStr.split(" ");
   const monthIdx = MONTH_NAMES.indexOf(monthName);
   const year = parseInt(yearStr);
@@ -118,7 +113,6 @@ function monthToDate(monthStr: string): string {
   return `${year}-${String(monthIdx + 1).padStart(2, "0")}-01`;
 }
 
-// Extract client name from prompt
 function extractClientName(prompt: string): string {
   const STOP_WORDS = new Set([
     "monthly",
@@ -162,28 +156,32 @@ function extractClientName(prompt: string): string {
     "dec",
   ]);
 
-  // Try "for [Name]" — first capitalized word after "for" that isn't a stop word
   const forMatches = [...prompt.matchAll(/\bfor\s+([A-Z][a-zA-Z]+)/gi)];
   for (const m of forMatches) {
     const name = m[1];
     if (!STOP_WORDS.has(name.toLowerCase())) return name;
   }
 
-  // Try "[Name]'s invoice"
   const possessive = prompt.match(
-    /([A-Z][a-zA-Z]+)'s\s+(?:[\d,₹]+\s+)?invoice/i
+    /([A-Z][a-zA-Z]+)'s\s+(?:[\d,₹$€]+\s+)?invoice/i
   );
   if (possessive && !STOP_WORDS.has(possessive[1].toLowerCase())) {
     return possessive[1];
   }
 
-  // Try "Invoice/Bill [Name]"
   const direct = prompt.match(/^(?:invoice|bill)\s+([A-Z][a-zA-Z]+)/i);
   if (direct && !STOP_WORDS.has(direct[1].toLowerCase())) {
     return direct[1];
   }
 
   return "Client";
+}
+
+// ── Detect currency from prompt ──
+function detectCurrency(prompt: string): "INR" | "USD" | "EUR" {
+  if (/\$|USD|dollars?/i.test(prompt)) return "USD";
+  if (/€|EUR|euros?/i.test(prompt)) return "EUR";
+  return "INR";
 }
 
 export async function multiInvoiceNode(
@@ -218,17 +216,14 @@ export async function multiInvoiceNode(
     return { isMultiple: false };
   }
 
-  // Use subPrompts count — the detect prompt now generates meaningful subPrompts again
   const count = detection.subPrompts.length;
 
   // ── Step 2: Determine correct months ──
   const explicitMonths = extractExplicitMonths(state.prompt, currentYear);
   let expectedMonths: string[];
-  let finalCount = count; // from LLM detection
+  let finalCount = count;
 
   if (explicitMonths.length >= 2) {
-    // Explicit months found (with or without skip) — use them directly
-    // Override LLM count since LLM ignores skip instructions
     expectedMonths = explicitMonths;
     finalCount = explicitMonths.length;
   } else if (explicitMonths.length === 1) {
@@ -247,6 +242,7 @@ export async function multiInvoiceNode(
 
   // ── Step 3: Extract base info from prompt ──
   const clientName = extractClientName(state.prompt);
+  const currency = detectCurrency(state.prompt); // ← detect currency
   const currencyRates = await buildCurrencyContext();
 
   // ── Step 4: Generate each invoice ──
@@ -255,9 +251,6 @@ export async function multiInvoiceNode(
 
   const parsedInvoices: ParsedInvoice[] = [];
 
-  // Detect if this is multi-CLIENT (different clients) vs multi-MONTH (same client)
-  // Multi-client: subPrompts have different client names
-  // Multi-month: same client, different months
   const isMultiClient =
     detection.subPrompts.length > 1 &&
     new Set(
@@ -268,7 +261,7 @@ export async function multiInvoiceNode(
     ).size > 1;
 
   if (isMultiClient) {
-    // ── Multi-client: generate each invoice directly from its subPrompt ──
+    // ── Multi-client: generate each invoice from its subPrompt ──
     for (const subPrompt of detection.subPrompts) {
       const currencyRates = await buildCurrencyContext();
       const generatorTemplate = PromptTemplate.fromTemplate(GENERATOR_PROMPT);
@@ -283,7 +276,7 @@ export async function multiInvoiceNode(
       parsedInvoices.push(recalculateTotals(raw));
     }
   } else {
-    // ── Multi-month: existing loop unchanged ──
+    // ── Multi-month: pass currency to each invoice ──
     for (let i = 0; i < finalCount; i++) {
       const invoiceMonth = expectedMonths[i];
       const invoiceDate = monthToDate(invoiceMonth);
@@ -294,6 +287,7 @@ export async function multiInvoiceNode(
         invoiceMonth,
         invoiceDate,
         clientName,
+        currency, // ← added
         memoryContext: state.memoryContext,
       });
       const raw = (await invoiceStructured.invoke(formatted)) as ParsedInvoice;
@@ -303,10 +297,12 @@ export async function multiInvoiceNode(
           clientName,
           invoiceMonth,
           invoiceDate,
+          currency, // ← ensure currency is preserved
         })
       );
     }
   }
+
   // ── Step 5: Client match ──
   const invoicesWithMatch = await Promise.all(
     parsedInvoices.map(async (invoice) => {
@@ -322,7 +318,8 @@ export async function multiInvoiceNode(
   const summaryLabel = isMultiClient
     ? parsedInvoices
         .map(
-          (inv) => `**${inv.clientName}** ₹${inv.total.toLocaleString("en-IN")}`
+          (inv) =>
+            `**${inv.clientName}** ${formatCurrency(inv.total, inv.currency)}`
         )
         .join(", ")
     : `**${clientName}** (${expectedMonths.join(", ")})`;
@@ -331,8 +328,9 @@ export async function multiInvoiceNode(
     action: "multi_created",
     message: `Done! Prepared **${
       parsedInvoices.length
-    } invoices** for ${summaryLabel}.\n\nTotal value: **${formatINR(
-      totalSum
+    } invoices** for ${summaryLabel}.\n\nTotal value: **${formatCurrency(
+      totalSum,
+      currency
     )}**\n\nReview each invoice in the side panel.`,
     invoices: parsedInvoices,
     invoicesWithMatch,

@@ -28,11 +28,14 @@ import { SendInvoiceModal } from "@/components/invoice/modals/SendInvoiceModel";
 import { toast } from "sonner";
 import { getClientByName } from "@/lib/api/clientApi";
 import type { ClientAPI } from "@/lib/api/clientApi";
+import { formatCurrency } from "@/lib/currency";
+import { useAuth } from "@/hooks/useAuth";
 
 interface Invoice {
   _id: string;
   invoiceNumber: string;
   clientName: string;
+  currency?: "INR" | "USD" | "EUR";
   lineItems?: LineItem[];
   paymentTermsDays?: number;
   gstPercent: number;
@@ -44,6 +47,10 @@ interface Invoice {
   sgstAmount?: number;
   igstAmount?: number;
   gstAmount: number;
+  // USD/EUR Tax fields
+  taxPercent?: number;
+  taxAmount?: number;
+  taxLabel?: string;
   discountType?: "percent" | "amount" | "none";
   discountValue?: number;
   discountAmount?: number;
@@ -85,12 +92,8 @@ const STATUS_CONFIG = {
   },
 };
 
-function formatINR(amount: number) {
-  return new Intl.NumberFormat("en-IN", {
-    style: "currency",
-    currency: "INR",
-    maximumFractionDigits: 0,
-  }).format(amount);
+function formatINR(amount: number, currency?: "INR" | "USD" | "EUR") {
+  return formatCurrency(amount, currency ?? "INR");
 }
 
 function formatDate(dateStr: string) {
@@ -112,6 +115,7 @@ export function InvoiceViewPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { user } = useUser();
+  const { getUserProfile } = useAuth();
   const [invoice, setInvoice] = useState<Invoice | null>(null);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
@@ -136,9 +140,11 @@ export function InvoiceViewPage() {
 
   const handleDownload = async () => {
     if (!invoice) return;
+    const profile = await getUserProfile();
     await downloadInvoicePDF(
       {
         clientName: invoice.clientName,
+        currency: invoice.currency,
         lineItems: invoice.lineItems || [],
         gstPercent: invoice.gstPercent,
         gstType: invoice.gstType,
@@ -149,6 +155,9 @@ export function InvoiceViewPage() {
         sgstAmount: invoice.sgstAmount,
         igstAmount: invoice.igstAmount,
         gstAmount: invoice.gstAmount,
+        taxPercent: invoice.taxPercent,
+        taxAmount: invoice.taxAmount,
+        taxLabel: invoice.taxLabel,
         discountType: invoice.discountType,
         discountValue: invoice.discountValue,
         discountAmount: invoice.discountAmount,
@@ -159,7 +168,8 @@ export function InvoiceViewPage() {
         total: invoice.total,
       },
       invoice.invoiceNumber,
-      user?.fullName || "Ledger User"
+      user?.fullName || "Ledger User",
+      profile
     );
   };
 
@@ -174,10 +184,8 @@ export function InvoiceViewPage() {
 
   const handleConfirmInvoice = async () => {
     if (!invoice) return;
-
     try {
       const confirmed = await confirmInvoice(invoice._id);
-
       setInvoice((prev) =>
         prev
           ? {
@@ -187,11 +195,9 @@ export function InvoiceViewPage() {
             }
           : prev
       );
-
       toast.success("Invoice confirmed successfully!");
     } catch (err) {
       console.error("Failed to confirm invoice:", err);
-
       toast.error("Failed to confirm invoice");
     }
   };
@@ -225,11 +231,14 @@ export function InvoiceViewPage() {
   const daysUntilDue = invoice.dueDate
     ? getDaysUntilDue(invoice.dueDate)
     : null;
-
   const hasDiscount =
     invoice.discountType &&
     invoice.discountType !== "none" &&
     (invoice.discountValue || 0) > 0;
+
+  // Currency helpers
+  const currency = invoice.currency ?? "INR";
+  const isINR = currency === "INR";
 
   return (
     <div className="min-h-screen bg-[#F9FAFB]">
@@ -268,6 +277,12 @@ export function InvoiceViewPage() {
             <Badge className={`gap-1.5 rounded-full ${status.class}`}>
               {status.label}
             </Badge>
+            {/* Currency badge */}
+            {currency !== "INR" && (
+              <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-600 border border-indigo-100">
+                {currency}
+              </span>
+            )}
           </div>
           <p className="text-sm text-gray-400">
             Created on {formatDate(invoice.createdAt)}
@@ -309,6 +324,9 @@ export function InvoiceViewPage() {
                   <p className="text-white font-bold text-xl">
                     {invoice.invoiceNumber}
                   </p>
+                  {currency !== "INR" && (
+                    <p className="text-indigo-200 text-xs mt-1">{currency}</p>
+                  )}
                 </div>
               </div>
             </div>
@@ -384,7 +402,7 @@ export function InvoiceViewPage() {
                       <p className="text-sm font-semibold text-gray-900">
                         {item.description}
                       </p>
-                      {item.hsnSacCode && (
+                      {isINR && item.hsnSacCode && (
                         <p className="text-xs text-gray-400 mt-0.5 font-mono">
                           {item.hsnSacCode}
                         </p>
@@ -397,12 +415,12 @@ export function InvoiceViewPage() {
                     </div>
                     <div className="col-span-2 text-right">
                       <p className="text-sm text-gray-600">
-                        {formatINR(item.rate)}
+                        {formatINR(item.rate, currency)}
                       </p>
                     </div>
                     <div className="col-span-3 text-right">
                       <p className="text-sm font-bold text-gray-900">
-                        {formatINR(item.amount)}
+                        {formatINR(item.amount, currency)}
                       </p>
                     </div>
                   </div>
@@ -415,7 +433,7 @@ export function InvoiceViewPage() {
                   <div className="flex justify-between text-sm">
                     <span className="text-gray-500">Subtotal</span>
                     <span className="text-gray-700 font-medium">
-                      {formatINR(invoice.subtotal)}
+                      {formatINR(invoice.subtotal, currency)}
                     </span>
                   </div>
 
@@ -428,7 +446,7 @@ export function InvoiceViewPage() {
                           : ""}
                       </span>
                       <span className="font-medium">
-                        − {formatINR(invoice.discountAmount || 0)}
+                        − {formatINR(invoice.discountAmount || 0, currency)}
                       </span>
                     </div>
                   )}
@@ -437,43 +455,70 @@ export function InvoiceViewPage() {
                     <div className="flex justify-between text-sm">
                       <span className="text-gray-500">Taxable Amount</span>
                       <span className="text-gray-700 font-medium">
-                        {formatINR(invoice.taxableAmount || invoice.subtotal)}
+                        {formatINR(
+                          invoice.taxableAmount || invoice.subtotal,
+                          currency
+                        )}
                       </span>
                     </div>
                   )}
 
-                  {(invoice.gstType || "CGST_SGST") === "CGST_SGST" ? (
-                    <>
+                  {/* GST rows — INR only */}
+                  {isINR &&
+                    invoice.gstAmount > 0 &&
+                    ((invoice.gstType || "CGST_SGST") === "CGST_SGST" ? (
+                      <>
+                        <div className="flex justify-between text-sm">
+                          <span className="text-gray-500">
+                            CGST (
+                            {invoice.cgstPercent || invoice.gstPercent / 2}%)
+                          </span>
+                          <span className="text-gray-700 font-medium">
+                            {formatINR(
+                              invoice.cgstAmount || invoice.gstAmount / 2,
+                              currency
+                            )}
+                          </span>
+                        </div>
+                        <div className="flex justify-between text-sm">
+                          <span className="text-gray-500">
+                            SGST (
+                            {invoice.sgstPercent || invoice.gstPercent / 2}%)
+                          </span>
+                          <span className="text-gray-700 font-medium">
+                            {formatINR(
+                              invoice.sgstAmount || invoice.gstAmount / 2,
+                              currency
+                            )}
+                          </span>
+                        </div>
+                      </>
+                    ) : (
                       <div className="flex justify-between text-sm">
                         <span className="text-gray-500">
-                          CGST ({invoice.cgstPercent || invoice.gstPercent / 2}
-                          %)
+                          IGST ({invoice.igstPercent || invoice.gstPercent}%)
                         </span>
                         <span className="text-gray-700 font-medium">
                           {formatINR(
-                            invoice.cgstAmount || invoice.gstAmount / 2
+                            invoice.igstAmount || invoice.gstAmount,
+                            currency
                           )}
                         </span>
                       </div>
-                      <div className="flex justify-between text-sm">
-                        <span className="text-gray-500">
-                          SGST ({invoice.sgstPercent || invoice.gstPercent / 2}
-                          %)
-                        </span>
-                        <span className="text-gray-700 font-medium">
-                          {formatINR(
-                            invoice.sgstAmount || invoice.gstAmount / 2
-                          )}
-                        </span>
-                      </div>
-                    </>
-                  ) : (
+                    ))}
+
+                  {/* Tax/VAT row — USD/EUR only */}
+                  {!isINR && (invoice.taxAmount || 0) > 0 && (
                     <div className="flex justify-between text-sm">
                       <span className="text-gray-500">
-                        IGST ({invoice.igstPercent || invoice.gstPercent}%)
+                        {invoice.taxLabel ||
+                          (currency === "EUR" ? "VAT" : "Tax")}
+                        {(invoice.taxPercent || 0) > 0
+                          ? ` (${invoice.taxPercent}%)`
+                          : ""}
                       </span>
                       <span className="text-gray-700 font-medium">
-                        {formatINR(invoice.igstAmount || invoice.gstAmount)}
+                        {formatINR(invoice.taxAmount || 0, currency)}
                       </span>
                     </div>
                   )}
@@ -499,7 +544,7 @@ export function InvoiceViewPage() {
                       Total Due
                     </span>
                     <span className="text-lg font-bold text-indigo-600">
-                      {formatINR(invoice.total)}
+                      {formatINR(invoice.total, currency)}
                     </span>
                   </div>
                 </div>
@@ -627,7 +672,6 @@ export function InvoiceViewPage() {
                 Actions
               </p>
               <div className="space-y-2">
-                {/* Confirm — only on draft */}
                 {invoice.status === "draft" && (
                   <Button
                     variant="outline"
@@ -639,7 +683,6 @@ export function InvoiceViewPage() {
                   </Button>
                 )}
 
-                {/* Download PDF — always visible */}
                 <Button
                   variant="outline"
                   onClick={handleDownload}
@@ -649,7 +692,6 @@ export function InvoiceViewPage() {
                   Download PDF
                 </Button>
 
-                {/* Edit — only on draft and confirmed */}
                 {["draft", "confirmed"].includes(invoice.status) && (
                   <Button
                     variant="outline"
@@ -661,7 +703,6 @@ export function InvoiceViewPage() {
                   </Button>
                 )}
 
-                {/* Send — only on confirmed */}
                 {invoice.status === "confirmed" && (
                   <Button
                     variant="outline"
@@ -673,7 +714,6 @@ export function InvoiceViewPage() {
                   </Button>
                 )}
 
-                {/* Copy payment link — only on sent and overdue */}
                 {["sent", "overdue"].includes(invoice.status) && (
                   <Button
                     variant="outline"
@@ -691,7 +731,7 @@ export function InvoiceViewPage() {
               </div>
             </div>
 
-            {/* Status card */}
+            {/* Status cards */}
             {invoice.status === "draft" && (
               <div className="bg-gray-50 rounded-2xl border border-gray-200 p-5">
                 <div className="flex items-center gap-2 mb-3">
@@ -735,7 +775,7 @@ export function InvoiceViewPage() {
                   <div className="flex justify-between text-xs">
                     <span className="text-emerald-600">Amount</span>
                     <span className="font-semibold text-emerald-700">
-                      {formatINR(invoice.total)}
+                      {formatINR(invoice.total, currency)}
                     </span>
                   </div>
                   <div className="flex justify-between text-xs">
@@ -783,15 +823,7 @@ export function InvoiceViewPage() {
           }}
           onClose={() => setShowSendModal(false)}
           onSent={() => {
-            setInvoice((prev) =>
-              prev
-                ? {
-                    ...prev,
-                    status: "sent",
-                  }
-                : prev
-            );
-
+            setInvoice((prev) => (prev ? { ...prev, status: "sent" } : prev));
             setShowSendModal(false);
           }}
         />
@@ -812,19 +844,16 @@ export function InvoiceViewPage() {
               <div className="flex h-11 w-11 items-center justify-center rounded-full bg-emerald-100">
                 <CheckCircle2 className="h-5 w-5 text-emerald-600" />
               </div>
-
               <div className="flex-1">
                 <h2 className="text-lg font-semibold text-gray-900">
                   Confirm Invoice
                 </h2>
-
                 <p className="mt-1 text-sm text-gray-500 leading-relaxed">
                   Once confirmed, this invoice will get a final invoice number
                   and can be sent to the client.
                 </p>
               </div>
             </div>
-
             <div className="mt-6 flex items-center justify-end gap-3">
               <Button
                 variant="outline"
@@ -833,7 +862,6 @@ export function InvoiceViewPage() {
               >
                 Cancel
               </Button>
-
               <Button
                 onClick={async () => {
                   await handleConfirmInvoice();

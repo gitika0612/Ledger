@@ -23,17 +23,25 @@ interface PublicInvoice {
   cgstAmount?: number;
   sgstAmount?: number;
   igstAmount?: number;
+  taxPercent?: number;
+  taxAmount?: number;
+  taxLabel?: string;
+  discountType?: "percent" | "amount" | "none";
+  discountValue?: number;
+  discountAmount?: number;
+  taxableAmount?: number;
   total: number;
   invoiceMonth: string;
   dueDate: string;
   status: string;
   notes?: string;
+  currency: string;
 }
 
-function formatINR(amount: number) {
+function formatCurrency(amount: number, currency = "INR") {
   return new Intl.NumberFormat("en-IN", {
     style: "currency",
-    currency: "INR",
+    currency,
     maximumFractionDigits: 0,
   }).format(amount);
 }
@@ -122,8 +130,6 @@ export function PaymentPage() {
     );
   }
 
-  const hasGst = invoice.gstAmount > 0;
-
   return (
     <div style={styles.page}>
       <style>{`
@@ -167,7 +173,9 @@ export function PaymentPage() {
           {/* Amount hero */}
           <div style={styles.amountHero}>
             <p style={styles.amountLabel}>Amount due</p>
-            <p style={styles.amountValue}>{formatINR(invoice.total)}</p>
+            <p style={styles.amountValue}>
+              {formatCurrency(invoice.total, invoice.currency)}
+            </p>
             <p style={styles.amountSubtext}>
               Billed to {invoice.clientName} · {invoice.invoiceMonth}
             </p>
@@ -185,10 +193,13 @@ export function PaymentPage() {
                   <div style={{ flex: 1 }}>
                     <p style={styles.lineItemName}>{item.description}</p>
                     <p style={styles.lineItemSub}>
-                      {item.quantity} {item.unit} × {formatINR(item.rate)}
+                      {item.quantity} {item.unit} ×{" "}
+                      {formatCurrency(item.rate, invoice.currency)}
                     </p>
                   </div>
-                  <p style={styles.lineItemAmount}>{formatINR(item.amount)}</p>
+                  <p style={styles.lineItemAmount}>
+                    {formatCurrency(item.amount, invoice.currency)}
+                  </p>
                 </div>
               ))}
             </div>
@@ -198,22 +209,59 @@ export function PaymentPage() {
           <div style={styles.divider} />
 
           {/* Totals */}
+          {/* Totals */}
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             <div style={styles.totalRow}>
               <span style={styles.totalLabel}>Subtotal</span>
               <span style={styles.totalValue}>
-                {formatINR(invoice.subtotal)}
+                {formatCurrency(invoice.subtotal, invoice.currency)}
               </span>
             </div>
 
-            {hasGst && invoice.gstType === "CGST_SGST" && (
+            {/* Discount */}
+            {invoice.discountType &&
+              invoice.discountType !== "none" &&
+              (invoice.discountAmount || 0) > 0 && (
+                <>
+                  <div style={styles.totalRow}>
+                    <span style={{ ...styles.totalLabel, color: "#059669" }}>
+                      Discount
+                      {invoice.discountType === "percent"
+                        ? ` (${invoice.discountValue}%)`
+                        : ""}
+                    </span>
+                    <span style={{ ...styles.totalValue, color: "#059669" }}>
+                      −{" "}
+                      {formatCurrency(
+                        invoice.discountAmount || 0,
+                        invoice.currency
+                      )}
+                    </span>
+                  </div>
+                  <div style={styles.totalRow}>
+                    <span style={styles.totalLabel}>Taxable Amount</span>
+                    <span style={styles.totalValue}>
+                      {formatCurrency(
+                        invoice.taxableAmount || invoice.subtotal,
+                        invoice.currency
+                      )}
+                    </span>
+                  </div>
+                </>
+              )}
+
+            {/* GST rows — INR only */}
+            {invoice.gstAmount > 0 && invoice.gstType === "CGST_SGST" && (
               <>
                 <div style={styles.totalRow}>
                   <span style={styles.totalLabel}>
                     CGST ({invoice.gstPercent / 2}%)
                   </span>
                   <span style={styles.totalValue}>
-                    {formatINR(invoice.cgstAmount ?? invoice.gstAmount / 2)}
+                    {formatCurrency(
+                      invoice.cgstAmount ?? invoice.gstAmount / 2,
+                      invoice.currency
+                    )}
                   </span>
                 </div>
                 <div style={styles.totalRow}>
@@ -221,19 +269,40 @@ export function PaymentPage() {
                     SGST ({invoice.gstPercent / 2}%)
                   </span>
                   <span style={styles.totalValue}>
-                    {formatINR(invoice.sgstAmount ?? invoice.gstAmount / 2)}
+                    {formatCurrency(
+                      invoice.sgstAmount ?? invoice.gstAmount / 2,
+                      invoice.currency
+                    )}
                   </span>
                 </div>
               </>
             )}
-
-            {hasGst && invoice.gstType === "IGST" && (
+            {invoice.gstAmount > 0 && invoice.gstType === "IGST" && (
               <div style={styles.totalRow}>
                 <span style={styles.totalLabel}>
                   IGST ({invoice.gstPercent}%)
                 </span>
                 <span style={styles.totalValue}>
-                  {formatINR(invoice.igstAmount ?? invoice.gstAmount)}
+                  {formatCurrency(
+                    invoice.igstAmount ?? invoice.gstAmount,
+                    invoice.currency
+                  )}
+                </span>
+              </div>
+            )}
+
+            {/* Tax/VAT row — USD/EUR only */}
+            {(invoice.taxAmount || 0) > 0 && (
+              <div style={styles.totalRow}>
+                <span style={styles.totalLabel}>
+                  {invoice.taxLabel ||
+                    (invoice.currency === "EUR" ? "VAT" : "Tax")}
+                  {(invoice.taxPercent || 0) > 0
+                    ? ` (${invoice.taxPercent}%)`
+                    : ""}
+                </span>
+                <span style={styles.totalValue}>
+                  {formatCurrency(invoice.taxAmount || 0, invoice.currency)}
                 </span>
               </div>
             )}
@@ -257,7 +326,7 @@ export function PaymentPage() {
                   letterSpacing: "-0.3px",
                 }}
               >
-                {formatINR(invoice.total)}
+                {formatCurrency(invoice.total, invoice.currency)}
               </span>
             </div>
           </div>
@@ -297,7 +366,7 @@ export function PaymentPage() {
                 Redirecting to payment...
               </span>
             ) : (
-              `Pay ${formatINR(invoice.total)}`
+              `Pay ${formatCurrency(invoice.total, invoice.currency)}`
             )}
           </button>
 

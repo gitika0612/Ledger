@@ -24,11 +24,13 @@ import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import { useUser } from "@clerk/clerk-react";
 import { getClientByName } from "@/lib/api/clientApi";
+import { formatCurrency, getCurrencySymbol } from "@/lib/currency";
 
 export interface EditInvoiceData {
   _id: string;
   invoiceNumber: string;
   clientName: string;
+  currency?: "INR" | "USD" | "EUR";
   clientEmail?: string;
   clientAddress?: string;
   clientCity?: string;
@@ -36,12 +38,18 @@ export interface EditInvoiceData {
   clientPincode?: string;
   lineItems?: LineItem[];
   paymentTermsDays?: number;
+  // INR GST fields
   gstPercent: number;
   gstType?: "IGST" | "CGST_SGST";
   cgstAmount?: number;
   sgstAmount?: number;
   igstAmount?: number;
   gstAmount: number;
+  // USD/EUR Tax fields
+  taxPercent?: number;
+  taxAmount?: number;
+  taxLabel?: string;
+  // Common
   discountType?: "percent" | "amount" | "none";
   discountValue?: number;
   discountAmount?: number;
@@ -180,22 +188,18 @@ function UnitSelector({
   );
 }
 
-function formatINR(amount: number) {
-  return new Intl.NumberFormat("en-IN", {
-    style: "currency",
-    currency: "INR",
-    maximumFractionDigits: 0,
-  }).format(amount);
-}
-
 function isValidEmail(email: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
 }
 
+// ── Dual-path recompute ──
 function recompute(
   items: LineItem[],
+  currency: "INR" | "USD" | "EUR",
   gstPercent: number,
   gstType: "IGST" | "CGST_SGST",
+  taxPercent: number,
+  taxLabel: string,
   discountType: "percent" | "amount" | "none",
   discountValue: number
 ) {
@@ -207,20 +211,42 @@ function recompute(
       ? Math.min(discountValue, subtotal)
       : 0;
   const taxableAmount = subtotal - discountAmount;
-  const gstAmount = Math.round((taxableAmount * gstPercent) / 100);
-  const cgstAmount = gstType === "CGST_SGST" ? Math.round(gstAmount / 2) : 0;
-  const sgstAmount = gstType === "CGST_SGST" ? gstAmount - cgstAmount : 0;
-  const igstAmount = gstType === "IGST" ? gstAmount : 0;
-  return {
-    subtotal,
-    discountAmount,
-    taxableAmount,
-    gstAmount,
-    cgstAmount,
-    sgstAmount,
-    igstAmount,
-    total: taxableAmount + gstAmount,
-  };
+
+  if (currency === "INR") {
+    const gstAmount = Math.round((taxableAmount * gstPercent) / 100);
+    const cgstAmount = gstType === "CGST_SGST" ? Math.round(gstAmount / 2) : 0;
+    const sgstAmount = gstType === "CGST_SGST" ? gstAmount - cgstAmount : 0;
+    const igstAmount = gstType === "IGST" ? gstAmount : 0;
+    return {
+      subtotal,
+      discountAmount,
+      taxableAmount,
+      gstAmount,
+      cgstAmount,
+      sgstAmount,
+      igstAmount,
+      taxPercent: 0,
+      taxAmount: 0,
+      taxLabel: "",
+      total: taxableAmount + gstAmount,
+    };
+  } else {
+    const taxAmount = Math.round((taxableAmount * taxPercent) / 100);
+    const resolvedLabel = taxLabel || (currency === "EUR" ? "VAT" : "Tax");
+    return {
+      subtotal,
+      discountAmount,
+      taxableAmount,
+      gstAmount: 0,
+      cgstAmount: 0,
+      sgstAmount: 0,
+      igstAmount: 0,
+      taxPercent,
+      taxAmount,
+      taxLabel: resolvedLabel,
+      total: taxableAmount + taxAmount,
+    };
+  }
 }
 
 function termsToISO(terms: number, invoiceDate?: string): string {
@@ -274,6 +300,11 @@ export function EditInvoiceModal({
 }: EditInvoiceModalProps) {
   const { user } = useUser();
 
+  const currency = invoice.currency ?? "INR";
+  const isINR = currency === "INR";
+  const symbol = getCurrencySymbol(currency);
+  const fmt = (amount: number) => formatCurrency(amount, currency);
+
   const [form, setForm] = useState({
     clientName: invoice.clientName,
     clientEmail: invoice.clientEmail || "",
@@ -283,8 +314,20 @@ export function EditInvoiceModal({
     clientPincode: invoice.clientPincode || "",
     lineItems: (invoice.lineItems || []) as LineItem[],
     paymentTermsDays: invoice.paymentTermsDays || 15,
-    gstPercent: invoice.gstAmount === 0 ? 0 : invoice.gstPercent,
+    // INR GST
+    gstPercent: isINR ? (invoice.gstAmount === 0 ? 0 : invoice.gstPercent) : 0,
     gstType: (invoice.gstType || "CGST_SGST") as "IGST" | "CGST_SGST",
+    gstAmount: isINR ? invoice.gstAmount : 0,
+    cgstAmount: isINR ? invoice.cgstAmount || 0 : 0,
+    sgstAmount: isINR ? invoice.sgstAmount || 0 : 0,
+    igstAmount: isINR ? invoice.igstAmount || 0 : 0,
+    // USD/EUR Tax
+    taxPercent: !isINR ? invoice.taxPercent || 0 : 0,
+    taxAmount: !isINR ? invoice.taxAmount || 0 : 0,
+    taxLabel: !isINR
+      ? invoice.taxLabel || (currency === "EUR" ? "VAT" : "Tax")
+      : "",
+    // Common
     discountType: (invoice.discountType || "none") as
       | "percent"
       | "amount"
@@ -294,10 +337,6 @@ export function EditInvoiceModal({
     notes: invoice.notes || "",
     subtotal: invoice.subtotal,
     taxableAmount: invoice.taxableAmount || invoice.subtotal,
-    gstAmount: invoice.gstAmount,
-    cgstAmount: invoice.cgstAmount || 0,
-    sgstAmount: invoice.sgstAmount || 0,
-    igstAmount: invoice.igstAmount || 0,
     total: invoice.total,
     dueDate: invoice.dueDate
       ? new Date(invoice.dueDate).toISOString().split("T")[0]
@@ -317,8 +356,6 @@ export function EditInvoiceModal({
         if (!client) return;
         setForm((prev) => ({
           ...prev,
-          // Only populate if the invoice prop didn't already have them
-          // (gives priority to any data the invoice itself carries)
           clientEmail: prev.clientEmail || client.email || "",
           clientAddress: prev.clientAddress || client.address || "",
           clientCity: prev.clientCity || client.city || "",
@@ -326,9 +363,7 @@ export function EditInvoiceModal({
           clientPincode: prev.clientPincode || client.pincode || "",
         }));
       })
-      .catch(() => {
-        // Client record may not exist — silently ignore, user can fill manually
-      })
+      .catch(() => {})
       .finally(() => setClientLoading(false));
   }, [user?.id, invoice.clientName]);
 
@@ -359,9 +394,11 @@ export function EditInvoiceModal({
       errs.clientEmail = "Enter a valid email address";
     if (form.clientPincode && !/^[1-9][0-9]{5}$/.test(form.clientPincode))
       errs.clientPincode = "Enter a valid 6-digit pincode";
-    const gst = Number(form.gstPercent);
-    if (isNaN(gst) || gst < 0 || gst > 100)
-      errs.gstPercent = "GST must be 0–100";
+    if (isINR) {
+      const gst = Number(form.gstPercent);
+      if (isNaN(gst) || gst < 0 || gst > 100)
+        errs.gstPercent = "GST must be 0–100";
+    }
     const terms = Number(form.paymentTermsDays);
     if (isNaN(terms) || terms < 0 || terms > 365)
       errs.paymentTermsDays = "Must be 0–365 days";
@@ -394,13 +431,26 @@ export function EditInvoiceModal({
     !errors.lineItems &&
     !errors.lineItemErrors;
 
+  // ── Unified recalc helper ──
   const recalc = (
     items = form.lineItems,
     gstPercent = form.gstPercent,
     gstType = form.gstType,
+    taxPercent = form.taxPercent,
+    taxLabel = form.taxLabel,
     discountType = form.discountType,
     discountValue = form.discountValue
-  ) => recompute(items, gstPercent, gstType, discountType, discountValue);
+  ) =>
+    recompute(
+      items,
+      currency,
+      gstPercent,
+      gstType,
+      taxPercent,
+      taxLabel,
+      discountType,
+      discountValue
+    );
 
   const handleLineItemChange = (
     index: number,
@@ -457,20 +507,33 @@ export function EditInvoiceModal({
     setForm({ ...form, gstPercent: val, ...recalc(undefined, val) });
   const setGstType = (val: "IGST" | "CGST_SGST") =>
     setForm({ ...form, gstType: val, ...recalc(undefined, undefined, val) });
+  const setTaxPercent = (val: number) =>
+    setForm({
+      ...form,
+      ...recalc(undefined, undefined, undefined, val),
+    });
   const setDiscountType = (val: "percent" | "amount" | "none") => {
     const dv = val === "none" ? 0 : form.discountValue;
     setForm({
       ...form,
       discountType: val,
       discountValue: dv,
-      ...recalc(undefined, undefined, undefined, val, dv),
+      ...recalc(undefined, undefined, undefined, undefined, undefined, val, dv),
     });
   };
   const setDiscountValue = (val: number) =>
     setForm({
       ...form,
       discountValue: val,
-      ...recalc(undefined, undefined, undefined, form.discountType, val),
+      ...recalc(
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        form.discountType,
+        val
+      ),
     });
 
   const handlePaymentTermsChange = (days: number) => {
@@ -678,11 +741,9 @@ export function EditInvoiceModal({
             {/* ── LINE ITEMS ── */}
             <div>
               <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-1.5">
-                  <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">
-                    Line Items
-                  </p>
-                </div>
+                <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">
+                  Line Items
+                </p>
                 {touched.lineItems && errors.lineItems && (
                   <span className="text-xs text-red-500 flex items-center gap-1">
                     <AlertCircle className="w-3 h-3" /> {errors.lineItems}
@@ -743,59 +804,64 @@ export function EditInvoiceModal({
                         </Button>
                       </div>
 
-                      <div>
-                        <p className="text-xs text-gray-400 mb-1">
-                          HSN/SAC Code
-                        </p>
-                        <div className="flex gap-1">
-                          <div className="flex-1">
-                            <Input
-                              value={item.hsnSacCode || ""}
-                              onChange={(e) =>
-                                handleLineItemChange(
-                                  index,
-                                  "hsnSacCode",
-                                  e.target.value.replace(/\D/g, "").slice(0, 8)
-                                )
-                              }
-                              onBlur={() =>
-                                markTouched(`item_${index}_hsnSacCode`)
-                              }
-                              placeholder="Enter HSN/SAC code"
-                              maxLength={8}
-                              className={`rounded-lg text-xs bg-white focus-visible:ring-indigo-400 h-8 ${
-                                iHsn && itemErr?.hsnSacCode
-                                  ? "border-red-300"
-                                  : ""
-                              }`}
-                            />
-                            {iHsn && (
-                              <FieldError message={itemErr?.hsnSacCode} />
-                            )}
-                          </div>
+                      {/* HSN/SAC — INR only */}
+                      {isINR && (
+                        <div>
+                          <p className="text-xs text-gray-400 mb-1">
+                            HSN/SAC Code
+                          </p>
                           <div className="flex gap-1">
-                            {(["HSN", "SAC"] as const).map((type) => (
-                              <button
-                                key={type}
-                                onClick={() =>
+                            <div className="flex-1">
+                              <Input
+                                value={item.hsnSacCode || ""}
+                                onChange={(e) =>
                                   handleLineItemChange(
                                     index,
-                                    "hsnSacType",
-                                    type
+                                    "hsnSacCode",
+                                    e.target.value
+                                      .replace(/\D/g, "")
+                                      .slice(0, 8)
                                   )
                                 }
-                                className={`px-2 h-8 rounded-lg text-[10px] font-bold border transition-all ${
-                                  (item.hsnSacType || "SAC") === type
-                                    ? "bg-indigo-50 border-indigo-200 text-indigo-700"
-                                    : "bg-gray-50 border-gray-200 text-gray-400"
+                                onBlur={() =>
+                                  markTouched(`item_${index}_hsnSacCode`)
+                                }
+                                placeholder="Enter HSN/SAC code"
+                                maxLength={8}
+                                className={`rounded-lg text-xs bg-white focus-visible:ring-indigo-400 h-8 ${
+                                  iHsn && itemErr?.hsnSacCode
+                                    ? "border-red-300"
+                                    : ""
                                 }`}
-                              >
-                                {type}
-                              </button>
-                            ))}
+                              />
+                              {iHsn && (
+                                <FieldError message={itemErr?.hsnSacCode} />
+                              )}
+                            </div>
+                            <div className="flex gap-1">
+                              {(["HSN", "SAC"] as const).map((type) => (
+                                <button
+                                  key={type}
+                                  onClick={() =>
+                                    handleLineItemChange(
+                                      index,
+                                      "hsnSacType",
+                                      type
+                                    )
+                                  }
+                                  className={`px-2 h-8 rounded-lg text-[10px] font-bold border transition-all ${
+                                    (item.hsnSacType || "SAC") === type
+                                      ? "bg-indigo-50 border-indigo-200 text-indigo-700"
+                                      : "bg-gray-50 border-gray-200 text-gray-400"
+                                  }`}
+                                >
+                                  {type}
+                                </button>
+                              ))}
+                            </div>
                           </div>
                         </div>
-                      </div>
+                      )}
 
                       <div className="grid grid-cols-4 gap-2">
                         <div>
@@ -836,7 +902,9 @@ export function EditInvoiceModal({
                           {iUnit && <FieldError message={itemErr?.unit} />}
                         </div>
                         <div>
-                          <p className="text-xs text-gray-400 mb-1">Rate (₹)</p>
+                          <p className="text-xs text-gray-400 mb-1">
+                            Rate ({symbol})
+                          </p>
                           <Input
                             type="number"
                             min={0}
@@ -866,7 +934,7 @@ export function EditInvoiceModal({
                           <p className="text-xs text-gray-400 mb-1">Amount</p>
                           <div className="h-8 rounded-lg bg-indigo-50 border border-indigo-100 flex items-center px-2">
                             <span className="text-xs font-semibold text-indigo-700">
-                              {formatINR(item.amount)}
+                              {fmt(item.amount)}
                             </span>
                           </div>
                         </div>
@@ -891,51 +959,92 @@ export function EditInvoiceModal({
                 Invoice Settings
               </p>
               <div className="grid grid-cols-2 gap-3">
-                <FieldWrapper label="GST %">
+                {/* GST — INR only */}
+                {isINR && (
                   <>
-                    <Input
-                      type="number"
-                      min={0}
-                      max={100}
-                      value={form.gstPercent === 0 ? "" : form.gstPercent}
-                      onChange={(e) =>
-                        setGstPercent(
-                          e.target.value === ""
-                            ? 0
-                            : Math.min(100, Math.max(0, Number(e.target.value)))
-                        )
-                      }
-                      onBlur={() => markTouched("gstPercent")}
-                      placeholder="Enter GST"
-                      className={`rounded-xl text-sm focus-visible:ring-indigo-400 ${
-                        touched.gstPercent && errors.gstPercent
-                          ? "border-red-300"
-                          : ""
-                      }`}
-                    />
-                    {touched.gstPercent && (
-                      <FieldError message={errors.gstPercent} />
-                    )}
-                  </>
-                </FieldWrapper>
+                    <FieldWrapper label="GST %">
+                      <>
+                        <Input
+                          type="number"
+                          min={0}
+                          max={100}
+                          value={form.gstPercent === 0 ? "" : form.gstPercent}
+                          onChange={(e) =>
+                            setGstPercent(
+                              e.target.value === ""
+                                ? 0
+                                : Math.min(
+                                    100,
+                                    Math.max(0, Number(e.target.value))
+                                  )
+                            )
+                          }
+                          onBlur={() => markTouched("gstPercent")}
+                          placeholder="Enter GST"
+                          className={`rounded-xl text-sm focus-visible:ring-indigo-400 ${
+                            touched.gstPercent && errors.gstPercent
+                              ? "border-red-300"
+                              : ""
+                          }`}
+                        />
+                        {touched.gstPercent && (
+                          <FieldError message={errors.gstPercent} />
+                        )}
+                      </>
+                    </FieldWrapper>
 
-                <FieldWrapper label="GST Type">
-                  <div className="flex gap-2">
-                    {(["CGST_SGST", "IGST"] as const).map((type) => (
-                      <button
-                        key={type}
-                        onClick={() => setGstType(type)}
-                        className={`flex-1 h-9 rounded-xl text-xs font-semibold border transition-all ${
-                          form.gstType === type
-                            ? "bg-indigo-50 border-indigo-200 text-indigo-700"
-                            : "bg-gray-50 border-gray-200 text-gray-500 hover:bg-gray-100"
-                        }`}
-                      >
-                        {type === "CGST_SGST" ? "CGST + SGST" : "IGST"}
-                      </button>
-                    ))}
+                    <FieldWrapper label="GST Type">
+                      <div className="flex gap-2">
+                        {(["CGST_SGST", "IGST"] as const).map((type) => (
+                          <button
+                            key={type}
+                            onClick={() => setGstType(type)}
+                            className={`flex-1 h-9 rounded-xl text-xs font-semibold border transition-all ${
+                              form.gstType === type
+                                ? "bg-indigo-50 border-indigo-200 text-indigo-700"
+                                : "bg-gray-50 border-gray-200 text-gray-500 hover:bg-gray-100"
+                            }`}
+                          >
+                            {type === "CGST_SGST" ? "CGST + SGST" : "IGST"}
+                          </button>
+                        ))}
+                      </div>
+                    </FieldWrapper>
+                  </>
+                )}
+
+                {/* Tax % — USD/EUR only */}
+                {!isINR && (
+                  <div className="col-span-2">
+                    <FieldWrapper
+                      label={currency === "EUR" ? "VAT %" : "Tax %"}
+                    >
+                      <Input
+                        type="number"
+                        min={0}
+                        max={100}
+                        value={form.taxPercent === 0 ? "" : form.taxPercent}
+                        onChange={(e) =>
+                          setTaxPercent(
+                            e.target.value === ""
+                              ? 0
+                              : Math.min(
+                                  100,
+                                  Math.max(0, Number(e.target.value))
+                                )
+                          )
+                        }
+                        placeholder={`Enter ${
+                          currency === "EUR" ? "VAT" : "Tax"
+                        } %`}
+                        className="rounded-xl text-sm focus-visible:ring-indigo-400"
+                      />
+                      <p className="text-xs text-gray-400 mt-1">
+                        Leave 0 for tax-exempt invoices
+                      </p>
+                    </FieldWrapper>
                   </div>
-                </FieldWrapper>
+                )}
 
                 <FieldWrapper label="Payment Terms (days)">
                   <>
@@ -993,7 +1102,7 @@ export function EditInvoiceModal({
                             ? "No discount"
                             : type === "percent"
                             ? "%"
-                            : "₹ Fixed"}
+                            : `${symbol} Fixed`}
                         </button>
                       ))}
                       {form.discountType !== "none" && (
@@ -1025,7 +1134,7 @@ export function EditInvoiceModal({
               <div className="flex justify-between text-xs">
                 <span className="text-gray-500">Subtotal</span>
                 <span className="font-medium text-gray-700">
-                  {formatINR(form.subtotal)}
+                  {fmt(form.subtotal)}
                 </span>
               </div>
               {form.discountType !== "none" && form.discountAmount > 0 && (
@@ -1038,18 +1147,21 @@ export function EditInvoiceModal({
                         : ""}
                     </span>
                     <span className="font-medium">
-                      − {formatINR(form.discountAmount)}
+                      − {fmt(form.discountAmount)}
                     </span>
                   </div>
                   <div className="flex justify-between text-xs">
                     <span className="text-gray-500">Taxable Amount</span>
                     <span className="font-medium text-gray-700">
-                      {formatINR(form.taxableAmount)}
+                      {fmt(form.taxableAmount)}
                     </span>
                   </div>
                 </>
               )}
-              {form.gstAmount > 0 &&
+
+              {/* GST rows — INR only */}
+              {isINR &&
+                form.gstAmount > 0 &&
                 (showCgstSgst ? (
                   <>
                     <div className="flex justify-between text-xs">
@@ -1057,7 +1169,7 @@ export function EditInvoiceModal({
                         CGST ({form.gstPercent / 2}%)
                       </span>
                       <span className="font-medium text-gray-700">
-                        {formatINR(form.cgstAmount)}
+                        {fmt(form.cgstAmount)}
                       </span>
                     </div>
                     <div className="flex justify-between text-xs">
@@ -1065,7 +1177,7 @@ export function EditInvoiceModal({
                         SGST ({form.gstPercent / 2}%)
                       </span>
                       <span className="font-medium text-gray-700">
-                        {formatINR(form.sgstAmount)}
+                        {fmt(form.sgstAmount)}
                       </span>
                     </div>
                   </>
@@ -1075,14 +1187,28 @@ export function EditInvoiceModal({
                       IGST ({form.gstPercent}%)
                     </span>
                     <span className="font-medium text-gray-700">
-                      {formatINR(form.igstAmount)}
+                      {fmt(form.igstAmount)}
                     </span>
                   </div>
                 ))}
+
+              {/* Tax/VAT row — USD/EUR only */}
+              {!isINR && form.taxAmount > 0 && (
+                <div className="flex justify-between text-xs">
+                  <span className="text-gray-500">
+                    {form.taxLabel || (currency === "EUR" ? "VAT" : "Tax")}
+                    {form.taxPercent > 0 ? ` (${form.taxPercent}%)` : ""}
+                  </span>
+                  <span className="font-medium text-gray-700">
+                    {fmt(form.taxAmount)}
+                  </span>
+                </div>
+              )}
+
               <Separator className="my-1" />
               <div className="flex justify-between text-sm font-bold">
                 <span className="text-gray-900">Total</span>
-                <span className="text-indigo-600">{formatINR(form.total)}</span>
+                <span className="text-indigo-600">{fmt(form.total)}</span>
               </div>
             </div>
 

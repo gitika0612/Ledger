@@ -24,12 +24,14 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { formatCurrency } from "@/lib/currency";
 
 interface RecentInvoice {
   _id: string;
   invoiceNumber: string;
   clientName: string;
   total: number;
+  currency?: "INR" | "USD" | "EUR";
   status: "draft" | "confirmed" | "sent" | "paid" | "overdue";
 }
 
@@ -544,7 +546,7 @@ export function DashboardPage() {
                             </td>
                             <td className="px-5 py-3.5">
                               <span className="text-sm font-semibold text-gray-900">
-                                ₹{inv.total.toLocaleString("en-IN")}
+                                {formatCurrency(inv.total, inv.currency)}
                               </span>
                             </td>
                             <td className="px-5 py-3.5">

@@ -156,7 +156,6 @@ const styles = StyleSheet.create({
     fontFamily: "Helvetica-Bold",
     color: "#4F46E5",
   },
-  // Bank details section
   bankBox: {
     backgroundColor: "#F9FAFB",
     borderRadius: 6,
@@ -215,8 +214,12 @@ interface InvoicePDFProps {
   profile?: UserProfile | null;
 }
 
-function formatINR(amount: number) {
-  return `Rs. ${amount.toLocaleString("en-IN")}`;
+function formatINR(
+  amount: number,
+  currency: "INR" | "USD" | "EUR" = "INR"
+): string {
+  const symbol = currency === "USD" ? "$" : currency === "EUR" ? "€" : "₹";
+  return `${symbol}${amount.toLocaleString("en-IN")}`;
 }
 
 function getInvoiceDates(invoice: ParsedInvoice) {
@@ -248,10 +251,7 @@ export function InvoicePDF({
 }: InvoicePDFProps) {
   const { today, dueDate } = getInvoiceDates(invoice);
 
-  // Build seller name — prefer businessName, fallback to userName
   const sellerName = profile?.businessName || userName;
-
-  // Build seller address
   const addressParts = [
     profile?.address,
     profile?.city,
@@ -260,12 +260,20 @@ export function InvoicePDF({
   ].filter(Boolean);
   const sellerAddress = addressParts.join(", ");
 
-  // Check if bank details exist
   const hasBankDetails =
     profile?.bankName ||
     profile?.accountNumber ||
     profile?.ifscCode ||
     profile?.upiId;
+
+  // Currency helpers
+  const currency = invoice.currency ?? "INR";
+  const isINR = currency === "INR";
+
+  const hasDiscount =
+    invoice.discountType &&
+    invoice.discountType !== "none" &&
+    (invoice.discountValue || 0) > 0;
 
   return (
     <Document>
@@ -287,6 +295,12 @@ export function InvoicePDF({
           <View>
             <Text style={styles.invoiceLabel}>INVOICE</Text>
             <Text style={styles.invoiceNumber}>{invoiceNumber}</Text>
+            {/* Currency label for non-INR */}
+            {!isINR && (
+              <Text style={[styles.invoiceLabel, { marginTop: 4 }]}>
+                {currency}
+              </Text>
+            )}
           </View>
         </View>
 
@@ -295,7 +309,6 @@ export function InvoicePDF({
 
         {/* ── From / To / Date ── */}
         <View style={styles.fromToRow}>
-          {/* FROM */}
           <View style={styles.fromToBox}>
             <Text style={styles.sectionLabel}>FROM</Text>
             <Text style={styles.sectionValue}>{sellerName}</Text>
@@ -305,18 +318,16 @@ export function InvoicePDF({
             {profile?.phone ? (
               <Text style={styles.sectionSub}>{profile.phone}</Text>
             ) : null}
-            {profile?.gstin ? (
+            {isINR && profile?.gstin ? (
               <Text style={styles.sectionSub}>GSTIN: {profile.gstin}</Text>
             ) : null}
           </View>
 
-          {/* BILL TO */}
           <View style={styles.fromToBox}>
             <Text style={styles.sectionLabel}>BILL TO</Text>
             <Text style={styles.sectionValue}>{invoice.clientName}</Text>
           </View>
 
-          {/* DATES */}
           <View style={styles.fromToBox}>
             <Text style={styles.sectionLabel}>INVOICE DATE</Text>
             <Text style={styles.sectionValue}>{today}</Text>
@@ -348,14 +359,26 @@ export function InvoicePDF({
             <View key={index} style={styles.tableRow}>
               <View style={styles.tableColDesc}>
                 <Text style={styles.tableBodyBold}>{item.description}</Text>
-                <Text
-                  style={[
-                    styles.tableBodyText,
-                    { color: "#9CA3AF", marginTop: 2 },
-                  ]}
-                >
-                  {item.quantity} {item.unit}
-                </Text>
+                {/* HSN/SAC — only for INR */}
+                {isINR && item.hsnSacCode ? (
+                  <Text
+                    style={[
+                      styles.tableBodyText,
+                      { color: "#9CA3AF", marginTop: 2 },
+                    ]}
+                  >
+                    {item.hsnSacType || "SAC"}: {item.hsnSacCode}
+                  </Text>
+                ) : (
+                  <Text
+                    style={[
+                      styles.tableBodyText,
+                      { color: "#9CA3AF", marginTop: 2 },
+                    ]}
+                  >
+                    {item.quantity} {item.unit}
+                  </Text>
+                )}
               </View>
               <View style={styles.tableColQty}>
                 <Text style={[styles.tableBodyText, { textAlign: "center" }]}>
@@ -364,12 +387,12 @@ export function InvoicePDF({
               </View>
               <View style={styles.tableColRate}>
                 <Text style={[styles.tableBodyText, { textAlign: "right" }]}>
-                  {formatINR(item.rate)}
+                  {formatINR(item.rate, currency)}
                 </Text>
               </View>
               <View style={styles.tableColAmount}>
                 <Text style={[styles.tableBodyBold, { textAlign: "right" }]}>
-                  {formatINR(item.amount)}
+                  {formatINR(item.amount, currency)}
                 </Text>
               </View>
             </View>
@@ -377,69 +400,88 @@ export function InvoicePDF({
         </View>
 
         {/* ── Totals ── */}
-        {/* ── Totals ── */}
         <View style={styles.totalsBox}>
           <View style={styles.totalRow}>
             <Text style={styles.totalLabel}>Subtotal</Text>
-            <Text style={styles.totalValue}>{formatINR(invoice.subtotal)}</Text>
+            <Text style={styles.totalValue}>
+              {formatINR(invoice.subtotal, currency)}
+            </Text>
           </View>
 
           {/* Discount */}
-          {invoice.discountType &&
-            invoice.discountType !== "none" &&
-            (invoice.discountValue || 0) > 0 && (
-              <View style={styles.totalRow}>
-                <Text style={styles.totalLabel}>
-                  Discount
-                  {invoice.discountType === "percent"
-                    ? ` (${invoice.discountValue}%)`
-                    : ""}
-                </Text>
-                <Text style={[styles.totalValue, { color: "#059669" }]}>
-                  - {formatINR(invoice.discountAmount || 0)}
-                </Text>
-              </View>
-            )}
-
-          {/* Taxable amount — only show if discount applied */}
-          {invoice.discountType &&
-            invoice.discountType !== "none" &&
-            (invoice.discountValue || 0) > 0 && (
-              <View style={styles.totalRow}>
-                <Text style={styles.totalLabel}>Taxable Amount</Text>
-                <Text style={styles.totalValue}>
-                  {formatINR(invoice.taxableAmount || invoice.subtotal)}
-                </Text>
-              </View>
-            )}
-
-          {/* GST split */}
-          {(invoice.gstType || "CGST_SGST") === "CGST_SGST" ? (
-            <>
-              <View style={styles.totalRow}>
-                <Text style={styles.totalLabel}>
-                  CGST ({invoice.cgstPercent || invoice.gstPercent / 2}%)
-                </Text>
-                <Text style={styles.totalValue}>
-                  {formatINR(invoice.cgstAmount || invoice.gstAmount / 2)}
-                </Text>
-              </View>
-              <View style={styles.totalRow}>
-                <Text style={styles.totalLabel}>
-                  SGST ({invoice.sgstPercent || invoice.gstPercent / 2}%)
-                </Text>
-                <Text style={styles.totalValue}>
-                  {formatINR(invoice.sgstAmount || invoice.gstAmount / 2)}
-                </Text>
-              </View>
-            </>
-          ) : (
+          {hasDiscount && (
             <View style={styles.totalRow}>
               <Text style={styles.totalLabel}>
-                IGST ({invoice.igstPercent || invoice.gstPercent}%)
+                Discount
+                {invoice.discountType === "percent"
+                  ? ` (${invoice.discountValue}%)`
+                  : ""}
+              </Text>
+              <Text style={[styles.totalValue, { color: "#059669" }]}>
+                - {formatINR(invoice.discountAmount || 0, currency)}
+              </Text>
+            </View>
+          )}
+
+          {hasDiscount && (
+            <View style={styles.totalRow}>
+              <Text style={styles.totalLabel}>Taxable Amount</Text>
+              <Text style={styles.totalValue}>
+                {formatINR(invoice.taxableAmount || invoice.subtotal, currency)}
+              </Text>
+            </View>
+          )}
+
+          {/* GST rows — INR only */}
+          {isINR &&
+            invoice.gstAmount > 0 &&
+            ((invoice.gstType || "CGST_SGST") === "CGST_SGST" ? (
+              <>
+                <View style={styles.totalRow}>
+                  <Text style={styles.totalLabel}>
+                    CGST ({invoice.cgstPercent || invoice.gstPercent / 2}%)
+                  </Text>
+                  <Text style={styles.totalValue}>
+                    {formatINR(
+                      invoice.cgstAmount || invoice.gstAmount / 2,
+                      currency
+                    )}
+                  </Text>
+                </View>
+                <View style={styles.totalRow}>
+                  <Text style={styles.totalLabel}>
+                    SGST ({invoice.sgstPercent || invoice.gstPercent / 2}%)
+                  </Text>
+                  <Text style={styles.totalValue}>
+                    {formatINR(
+                      invoice.sgstAmount || invoice.gstAmount / 2,
+                      currency
+                    )}
+                  </Text>
+                </View>
+              </>
+            ) : (
+              <View style={styles.totalRow}>
+                <Text style={styles.totalLabel}>
+                  IGST ({invoice.igstPercent || invoice.gstPercent}%)
+                </Text>
+                <Text style={styles.totalValue}>
+                  {formatINR(invoice.igstAmount || invoice.gstAmount, currency)}
+                </Text>
+              </View>
+            ))}
+
+          {/* Tax/VAT row — USD/EUR only */}
+          {!isINR && (invoice.taxAmount || 0) > 0 && (
+            <View style={styles.totalRow}>
+              <Text style={styles.totalLabel}>
+                {invoice.taxLabel || (currency === "EUR" ? "VAT" : "Tax")}
+                {(invoice.taxPercent || 0) > 0
+                  ? ` (${invoice.taxPercent}%)`
+                  : ""}
               </Text>
               <Text style={styles.totalValue}>
-                {formatINR(invoice.igstAmount || invoice.gstAmount)}
+                {formatINR(invoice.taxAmount || 0, currency)}
               </Text>
             </View>
           )}
@@ -448,7 +490,7 @@ export function InvoicePDF({
           <View style={styles.grandTotalRow}>
             <Text style={styles.grandTotalLabel}>Total Due</Text>
             <Text style={styles.grandTotalValue}>
-              {formatINR(invoice.total)}
+              {formatINR(invoice.total, currency)}
             </Text>
           </View>
         </View>
@@ -479,8 +521,8 @@ export function InvoicePDF({
           </View>
         )}
 
-        {/* ── Bank Details ── */}
-        {hasBankDetails && (
+        {/* ── Bank Details — INR only ── */}
+        {isINR && hasBankDetails && (
           <View style={styles.bankBox}>
             <Text style={styles.bankTitle}>PAYMENT DETAILS</Text>
             {profile?.bankName && (

@@ -90,6 +90,7 @@ export async function sendInvoice(req: Request, res: Response): Promise<void> {
       dueDate: invoice.dueDate,
       pdfBuffer,
       invoiceId: id,
+      currency: invoice.currency ?? "INR",
     });
 
     // ── 6. Update invoice status ──

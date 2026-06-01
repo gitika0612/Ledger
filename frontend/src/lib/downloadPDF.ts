@@ -7,12 +7,14 @@ import { UserProfile } from "@/hooks/useAuth";
 export async function downloadInvoicePDF(
   invoice: ParsedInvoice,
   invoiceNumber: string,
-  userName: string
+  userName: string,
+  profile?: UserProfile | null
 ) {
   const element = createElement(InvoicePDF, {
     invoice,
     invoiceNumber,
     userName,
+    profile: profile ?? null,
   });
 
   // @ts-expect-error — react-pdf types are strict but this works correctly at runtime
@@ -46,7 +48,6 @@ export async function generateInvoicePDFBase64(
     const reader = new FileReader();
     reader.onload = () => {
       const dataUrl = reader.result as string;
-      // Strip "data:application/pdf;base64," prefix
       resolve(dataUrl.split(",")[1]);
     };
     reader.onerror = reject;

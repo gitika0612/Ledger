@@ -34,6 +34,7 @@ import {
   findMatchingInvoices,
 } from "@/lib/invoice-chat/sessionHelpers";
 import { isEditIntent } from "@/lib/invoice-chat/Editintenthelper";
+import { formatCurrency } from "@/lib/currency";
 
 export interface UIMessage {
   _id: string;
@@ -53,6 +54,7 @@ interface InvoiceHistoryEntry {
   gstType?: string;
   paymentTermsDays?: number;
   total?: number;
+  currency?: "INR" | "USD" | "EUR";
 }
 
 const GENERIC_CLIENT_NAMES = new Set([
@@ -175,6 +177,7 @@ export function useInvoiceChat() {
                     invoice: {
                       clientName: db.clientName,
                       lineItems: db.lineItems,
+                      currency: db.currency,
                       gstPercent: db.gstPercent,
                       gstType: db.gstType,
                       cgstAmount: db.cgstAmount,
@@ -191,6 +194,9 @@ export function useInvoiceChat() {
                       total: db.total,
                       invoiceDate: db.invoiceDate,
                       invoiceMonth: db.invoiceMonth,
+                      taxAmount: db.taxAmount,
+                      taxLabel: db.taxLabel,
+                      taxPercent: db.taxPercent,
                     } as ParsedInvoice,
                     status: db.status,
                     invoiceNumber: db.invoiceNumber,
@@ -468,8 +474,9 @@ export function useInvoiceChat() {
             clientName: invoice.clientName,
           });
           await addAIMessage(
-            `Invoice of **₹${invoice.total.toLocaleString(
-              "en-IN"
+            `Invoice of **${formatCurrency(
+              invoice.total,
+              invoice.currency
             )}** is ready!\n\nWhat's the client's name?`,
             sessionId
           );
@@ -639,62 +646,55 @@ export function useInvoiceChat() {
   const handlePendingReply = async (reply: string, sessionId: string) => {
     const current = pendingStateRef.current;
     if (!current || !user) return;
-    const replyLower = reply.toLowerCase().trim();
 
-    if (current.status === "awaiting_client_name") {
-      const realName = reply.trim();
-      const updatedInvoice = current.invoice
-        ? { ...current.invoice, clientName: realName }
-        : current.invoice;
-      setPending({
-        ...current,
-        status: "awaiting_client_details",
-        clientName: realName,
-        invoice: updatedInvoice,
-      });
-      await addAIMessage(
-        `Got it! Invoice for **${realName}**.\n\nPlease share their contact details:\n\n**Email** *(required)*\n*(Optional: Address, City, State, Phone, GSTIN)*\n\nOr say **skip** to continue without adding details.`,
-        sessionId
-      );
-      return;
-    }
+    const sessionContext = buildSessionContext(sessionInvoicesRef.current);
 
-    if (current.status === "awaiting_confirm_same") {
-      const isSame = ["same", "yes", "haan", "confirm", "y"].includes(
-        replyLower
-      );
-      if (isSame && current.matchedClient) {
+    const result = await parseInvoiceWithAI(
+      reply,
+      user.id,
+      sessionContext,
+      undefined,
+      current.invoice || null,
+      {
+        status: current.status,
+        clientName: current.clientName,
+        invoice: current.invoice,
+        originalPrompt: current.originalPrompt,
+        matchedClient: current.matchedClient,
+      }
+    );
+
+    // Backend wants to parse contact details (email/phone/address)
+    if (
+      result.action === "needs_client" &&
+      result.message === "_parse_client_details_"
+    ) {
+      const rawDetails = result.rawClientDetails || reply;
+      try {
+        const parsed = await parseClientDetailsFromText(
+          user.id,
+          rawDetails,
+          current.clientName!
+        );
         setPending(null);
         await addAIMessage(
-          `Got it! Using **${current.matchedClient.name}**'s saved details ✓`,
+          parsed?.client
+            ? `Saved **${current.clientName}**'s details ✓ Creating invoice now!`
+            : `Creating invoice! You can add client details later.`,
           sessionId
         );
         await saveDraftAndShow(
           current.invoice!,
-          current.matchedClient,
+          parsed?.client ?? null,
           sessionId,
           current.originalPrompt,
           true,
           true
         );
-      } else {
-        setPending({ ...current, status: "awaiting_client_details" });
-        await addAIMessage(
-          `Got it! Please share **${current.clientName}**'s contact details:\n\n**Email** *(required)*\n*(Optional: Address, City, State, Phone, GSTIN)*\n\nOr say **skip**.`,
-          sessionId
-        );
-      }
-      return;
-    }
-
-    if (current.status === "awaiting_client_details") {
-      setPending(null);
-      const isSkip = replyLower === "skip" || replyLower.startsWith("skip");
-      if (isSkip) {
-        await addAIMessage(
-          `No problem! Creating invoice without client details.`,
-          sessionId
-        );
+        return;
+      } catch {
+        setPending(null);
+        await addAIMessage(`Creating invoice now!`, sessionId);
         await saveDraftAndShow(
           current.invoice!,
           null,
@@ -703,159 +703,37 @@ export function useInvoiceChat() {
           true,
           true
         );
-      } else {
-        try {
-          const result = await parseClientDetailsFromText(
-            user.id,
-            reply,
-            current.clientName!
-          );
-          await addAIMessage(
-            result?.client
-              ? `Saved **${current.clientName}**'s details ✓ Creating invoice now!`
-              : `Creating invoice! You can add client details later.`,
-            sessionId
-          );
-          await saveDraftAndShow(
-            current.invoice!,
-            result?.client ?? null,
-            sessionId,
-            current.originalPrompt,
-            true,
-            true
-          );
-        } catch {
-          await addAIMessage(
-            `Creating invoice now! You can add client details later.`,
-            sessionId
-          );
-          await saveDraftAndShow(
-            current.invoice!,
-            null,
-            sessionId,
-            current.originalPrompt,
-            true,
-            true
-          );
-        }
+        return;
       }
+    }
+
+    // Backend says needs_client with a new/corrected name — update pending
+    if (result.action === "needs_client" && result.pendingClientName) {
+      setPending({
+        ...current,
+        status: "awaiting_client_details",
+        clientName: result.pendingClientName,
+        invoice: result.invoice || current.invoice,
+      });
+      await addAIMessage(result.message, sessionId);
       return;
     }
 
-    if (current.status === "awaiting_ambiguity") {
-      setPending(null);
-      const specificRef = reply.trim().toUpperCase();
-
-      // Find the source invoice in session by invoice number
-      const sourceInvoice = sessionInvoicesRef.current.find(
-        (s) => s.invoiceNumber?.toUpperCase() === specificRef
-      );
-
-      if (!sourceInvoice) {
-        await addAIMessage(
-          `Couldn't find **${specificRef}** in this session. Please use an invoice number from the list above.`,
-          sessionId
-        );
-        setPending(current);
-        return;
-      }
-
-      const forIndex = current.originalPrompt
-        .toLowerCase()
-        .lastIndexOf(" for ");
-      const destClient =
-        forIndex !== -1
-          ? current.originalPrompt
-              .slice(forIndex + 5)
-              .trim()
-              .split(" ")
-              .slice(0, 3)
-              .join(" ")
-              .trim()
-          : "";
-
-      if (!destClient) {
-        // Fall back to AI if we can't parse destination
-        const sessionContext = buildSessionContext(sessionInvoicesRef.current);
-        const result = await parseInvoiceWithAI(
-          `Copy invoice ${specificRef} — ${current.originalPrompt}`,
-          user.id,
-          sessionContext,
-          undefined,
-          null
-        );
-        await handleAgentResult(result, sessionId, current.originalPrompt);
-        return;
-      }
-
-      // Build the copied invoice with new client name, fresh date
-      const now = new Date();
-      const copiedInvoice: ParsedInvoice = {
-        ...sourceInvoice.invoice,
-        clientName: destClient,
-        invoiceDate: now.toISOString().split("T")[0],
-        invoiceMonth: now.toLocaleDateString("en-IN", {
-          month: "long",
-          year: "numeric",
-        }),
-      };
-      const sessionCtxForCopy = buildSessionContext(sessionInvoicesRef.current);
-      const copyAgentResult = await parseInvoiceWithAI(
-        `Copy invoice ${specificRef} for client named ${destClient}`,
-        user.id,
-        sessionCtxForCopy,
-        undefined,
-        null
-      );
-
-      // Use the copied invoice data (correct fields) but the agent's matchResult for client lookup
-      const resultWithCopiedInvoice = {
-        ...copyAgentResult,
-        invoice: copiedInvoice,
-      };
-      await handleAgentResult(
-        resultWithCopiedInvoice,
-        sessionId,
-        current.originalPrompt
-      );
+    // Backend says needs_client (stay in flow — different client, etc.)
+    if (result.action === "needs_client") {
+      setPending({
+        ...current,
+        status: "awaiting_client_details",
+        clientName: result.invoice?.clientName || current.clientName,
+        invoice: result.invoice || current.invoice,
+      });
+      await addAIMessage(result.message, sessionId);
       return;
     }
 
-    if (current.status === "awaiting_edit_ambiguity") {
-      const isLatest = ["latest", "last", "recent"].includes(replyLower);
-      const allMatches = findMatchingInvoices(
-        sessionInvoicesRef.current,
-        current.ambiguityTargetRef ?? ""
-      );
-      const byReply = findMatchingInvoices(
-        sessionInvoicesRef.current,
-        replyLower
-      );
-      const latestMatch = [...allMatches].sort((a, b) =>
-        b.dbMessageId.localeCompare(a.dbMessageId)
-      )[0];
-      const target = isLatest ? latestMatch : byReply[0];
-
-      if (!target) {
-        await addAIMessage(
-          `Couldn't find **"${reply}"**. Please use the exact invoice number like **INV-2026-001**, or say **latest**.`,
-          sessionId
-        );
-        return;
-      }
-      setPending(null);
-      if (current.ambiguityInvoice) {
-        await applyEditAndShow(
-          target,
-          current.ambiguityInvoice,
-          `Updated **${target.invoice.clientName}**'s invoice (${
-            target.invoiceNumber ?? "Draft"
-          }).`,
-          sessionId
-        );
-      }
-      return;
-    }
+    // Resolved — clear pending and handle normally
+    setPending(null);
+    await handleAgentResult(result, sessionId, current.originalPrompt);
   };
 
   const handleSend = async (prompt: string) => {
@@ -955,15 +833,21 @@ export function useInvoiceChat() {
             )) as InvoiceHistoryEntry[];
             if (history?.length > 0) {
               const lines = history.map((inv, i) => {
+                const symbol =
+                  inv.currency === "USD"
+                    ? "$"
+                    : inv.currency === "EUR"
+                    ? "€"
+                    : "₹";
                 const items =
                   inv.lineItems
-                    ?.map((li) => `${li.description} ₹${li.rate}`)
+                    ?.map((li) => `${li.description} ${symbol}${li.rate}`)
                     .join(", ") ?? "";
                 return `Invoice ${i + 1} [${
                   inv.invoiceMonth ?? "unknown"
-                }]: ${items} | GST ${inv.gstPercent ?? 18}% ${
+                }]: ${items} | GST ${inv.gstPercent ?? 0}% ${
                   inv.gstType ?? ""
-                } | Terms ${inv.paymentTermsDays ?? 15}d | Total ₹${
+                } | Terms ${inv.paymentTermsDays ?? 15}d | Total ${symbol}${
                   inv.total ?? 0
                 }`;
               });
@@ -1152,9 +1036,10 @@ export function useInvoiceChat() {
       );
       const confirmContent = `✅ Invoice **${
         confirmed.invoiceNumber
-      }** confirmed for **${
-        si.invoice.clientName
-      }**. Total: ₹${si.invoice.total.toLocaleString("en-IN")}.`;
+      }** confirmed for **${si.invoice.clientName}**. Total: **${formatCurrency(
+        si.invoice.total,
+        si.invoice.currency
+      )}**.`;
       const savedMsg = await addChatMessage(
         user.id,
         currentSessionId,

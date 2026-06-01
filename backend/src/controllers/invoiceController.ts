@@ -8,8 +8,14 @@ import { ParsedInvoice } from "../agents/schemas/invoiceSchema";
 
 // ── Parse invoice (main AI endpoint) ──
 export async function parseInvoice(req: Request, res: Response): Promise<void> {
-  const { prompt, userId, sessionContext, memoryContext, currentInvoice } =
-    req.body;
+  const {
+    prompt,
+    userId,
+    sessionContext,
+    memoryContext,
+    currentInvoice,
+    pendingState,
+  } = req.body;
 
   if (!prompt || typeof prompt !== "string" || prompt.trim().length < 3) {
     res
@@ -29,6 +35,7 @@ export async function parseInvoice(req: Request, res: Response): Promise<void> {
       memoryContext:
         memoryContext || "No past invoice history for this client.",
       parsedInvoice: currentInvoice || null,
+      pendingState: pendingState || null,
     });
 
     if (result.error) {
@@ -36,9 +43,7 @@ export async function parseInvoice(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    // Always return agentResult — frontend reads action to decide what to do
     const agentResult = result.agentResult;
-
     if (!agentResult) {
       res.status(500).json({ error: "Agent returned no result" });
       return;
@@ -52,10 +57,7 @@ export async function parseInvoice(req: Request, res: Response): Promise<void> {
       }`
     );
 
-    res.status(200).json({
-      success: true,
-      ...agentResult,
-    });
+    res.status(200).json({ success: true, ...agentResult });
   } catch (err) {
     console.error("❌ Agent failed:", err);
     res
@@ -73,8 +75,10 @@ export async function saveDraftInvoice(
     userId,
     clientName,
     clientId,
+    currency,
     lineItems,
     paymentTermsDays,
+    // INR GST fields
     gstPercent,
     gstType,
     cgstPercent,
@@ -84,6 +88,11 @@ export async function saveDraftInvoice(
     sgstAmount,
     igstAmount,
     gstAmount,
+    // USD/EUR Tax fields
+    taxPercent,
+    taxAmount,
+    taxLabel,
+    // Common
     discountType,
     discountValue,
     discountAmount,
@@ -103,7 +112,6 @@ export async function saveDraftInvoice(
   }
 
   try {
-    // Idempotency check
     if (idempotencyKey) {
       const existing = await Invoice.findOne({ userId, idempotencyKey });
       if (existing) {
@@ -140,31 +148,46 @@ export async function saveDraftInvoice(
       $or: [{ status: "confirmed" }, { isConfirmed: true }],
     });
 
+    const resolvedCurrency = currency || "INR";
+    const isINR = resolvedCurrency === "INR";
+
     const invoice = await Invoice.create({
       userId,
       invoiceNumber,
       clientName,
       clientId: clientId || "",
+      currency: resolvedCurrency,
       lineItems: lineItems || [],
       paymentTermsDays: terms,
-      gstPercent:
-        gstPercent !== undefined && gstPercent !== null
+      // INR GST fields — only meaningful when currency=INR
+      gstPercent: isINR
+        ? gstPercent !== undefined && gstPercent !== null
           ? Number(gstPercent)
-          : 18,
+          : 0
+        : 0,
       gstType: gstType || "CGST_SGST",
-      cgstPercent:
-        cgstPercent !== undefined && cgstPercent !== null
+      cgstPercent: isINR
+        ? cgstPercent !== undefined && cgstPercent !== null
           ? Number(cgstPercent)
-          : 9,
-      sgstPercent:
-        sgstPercent !== undefined && sgstPercent !== null
+          : 0
+        : 0,
+      sgstPercent: isINR
+        ? sgstPercent !== undefined && sgstPercent !== null
           ? Number(sgstPercent)
-          : 9,
-      igstPercent: igstPercent || 0,
-      cgstAmount: cgstAmount || 0,
-      sgstAmount: sgstAmount || 0,
-      igstAmount: igstAmount || 0,
-      gstAmount: gstAmount || 0,
+          : 0
+        : 0,
+      igstPercent: isINR ? igstPercent || 0 : 0,
+      cgstAmount: isINR ? cgstAmount || 0 : 0,
+      sgstAmount: isINR ? sgstAmount || 0 : 0,
+      igstAmount: isINR ? igstAmount || 0 : 0,
+      gstAmount: isINR ? gstAmount || 0 : 0,
+      // USD/EUR Tax fields — only meaningful when currency=USD/EUR
+      taxPercent: !isINR ? taxPercent || 0 : 0,
+      taxAmount: !isINR ? taxAmount || 0 : 0,
+      taxLabel: !isINR
+        ? taxLabel || (resolvedCurrency === "EUR" ? "VAT" : "Tax")
+        : "",
+      // Common
       discountType: discountType || "none",
       discountValue: discountValue || 0,
       discountAmount: discountAmount || 0,
@@ -283,8 +306,10 @@ export async function updateInvoice(
       id,
       {
         clientName: req.body.clientName,
+        currency: req.body.currency,
         lineItems: req.body.lineItems,
         paymentTermsDays: req.body.paymentTermsDays,
+        // INR GST fields
         gstPercent: req.body.gstPercent,
         gstType: req.body.gstType,
         cgstPercent: req.body.cgstPercent,
@@ -294,6 +319,11 @@ export async function updateInvoice(
         sgstAmount: req.body.sgstAmount,
         igstAmount: req.body.igstAmount,
         gstAmount: req.body.gstAmount,
+        // USD/EUR Tax fields
+        taxPercent: req.body.taxPercent,
+        taxAmount: req.body.taxAmount,
+        taxLabel: req.body.taxLabel,
+        // Common
         discountType: req.body.discountType,
         discountValue: req.body.discountValue,
         discountAmount: req.body.discountAmount,
@@ -393,10 +423,7 @@ export async function getDashboardStats(
         },
         { $group: { _id: null, total: { $sum: "$total" } } },
       ]),
-      Invoice.countDocuments({
-        userId: clerkId,
-        status: "overdue",
-      }),
+      Invoice.countDocuments({ userId: clerkId, status: "overdue" }),
       Invoice.find({ userId: clerkId }).sort({ createdAt: -1 }).limit(5).lean(),
     ]);
     res.status(200).json({
@@ -465,7 +492,7 @@ export async function getLatestClientInvoice(req: Request, res: Response) {
     userId,
     clientName: { $regex: new RegExp(`^${clientName}$`, "i") },
   })
-    .sort({ createdAt: -1 }) // most recent regardless of status
+    .sort({ createdAt: -1 })
     .lean();
 
   if (!invoice) return res.status(404).json({ error: "Not found" });

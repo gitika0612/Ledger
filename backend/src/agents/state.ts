@@ -34,23 +34,37 @@ export interface InvoiceWithMatch {
   matchResult: MatchResult;
 }
 
-// The structured response the agent returns to the API layer
+// ── Pending state passed from frontend ──
+export interface PendingStateContext {
+  status:
+    | "awaiting_client_details"
+    | "awaiting_confirm_same"
+    | "awaiting_client_name"
+    | "awaiting_ambiguity"
+    | "awaiting_edit_ambiguity";
+  clientName?: string;
+  invoice?: ParsedInvoice | null;
+  originalPrompt?: string;
+  matchedClient?: IClientDocument | null;
+}
+
 export interface AgentResult {
   action: AgentAction;
-  message: string; // Human-readable chat message
-  invoice?: ParsedInvoice | null; // Single invoice
-  invoices?: ParsedInvoice[]; // Multiple invoices
-  targetRef?: string; // For edit: which invoice was edited
-  changedFields?: string[]; // For edit: what changed
-  warning?: string; // Non-fatal warning
-  matchResult?: MatchResult | null; // Client match result
+  message: string;
+  invoice?: ParsedInvoice | null;
+  invoices?: ParsedInvoice[];
+  targetRef?: string;
+  changedFields?: string[];
+  warning?: string;
+  matchResult?: MatchResult | null;
   invoicesWithMatch?: InvoiceWithMatch[];
-  // Split details
   splitDetails?: {
     originalAmount: number;
     parts: number;
     amountPerPart: number;
   };
+  pendingClientName?: string;
+  rawClientDetails?: string;
 }
 
 export interface InvoiceAgentState {
@@ -70,9 +84,10 @@ export interface InvoiceAgentState {
   parsedInvoices: ParsedInvoice[];
   invoicesWithMatch: InvoiceWithMatch[];
   matchResult: MatchResult | null;
-  agentResult: AgentResult | null; // Final result returned to frontend
+  agentResult: AgentResult | null;
   responseMessage: string;
   error: string | null;
+  pendingState: PendingStateContext | null;
 }
 
 export const initialState: Omit<
@@ -94,4 +109,5 @@ export const initialState: Omit<
   agentResult: null,
   responseMessage: "",
   error: null,
+  pendingState: null,
 };

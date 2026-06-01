@@ -29,9 +29,8 @@ import {
   ParsedInvoice,
   LineItem,
 } from "@/components/invoice/InvoicePreviewCard";
+import { formatCurrency } from "@/lib/currency";
 
-// Invoice shape needed for PDF generation — looser than ParsedInvoice
-// so both InvoiceListPage and InvoiceViewPage can pass their local Invoice type
 interface InvoiceForPDF {
   clientName: string;
   lineItems: LineItem[];
@@ -54,7 +53,9 @@ interface InvoiceForPDF {
   total: number;
   invoiceDate?: string;
   invoiceMonth?: string;
+  currency?: "INR" | "USD" | "EUR";
 }
+
 import api from "@/lib/api/api";
 
 interface SendInvoiceModalProps {
@@ -62,26 +63,18 @@ interface SendInvoiceModalProps {
   invoiceNumber: string;
   clientName: string;
   total: number;
-  invoice: InvoiceForPDF; // needed for PDF generation
+  invoice: InvoiceForPDF;
   onClose: () => void;
   onSent: () => void;
 }
 
 type ModalState =
-  | "loading" // fetching profile + client
-  | "no_profile" // user hasn't set up company name
-  | "no_email" // client has no email on file
-  | "ready" // all good — show summary + send
-  | "sending" // PDF generating + email sending
-  | "sent"; // success
-
-function formatINR(amount: number) {
-  return new Intl.NumberFormat("en-IN", {
-    style: "currency",
-    currency: "INR",
-    maximumFractionDigits: 0,
-  }).format(amount);
-}
+  | "loading"
+  | "no_profile"
+  | "no_email"
+  | "ready"
+  | "sending"
+  | "sent";
 
 function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email.trim());
@@ -102,15 +95,17 @@ export function SendInvoiceModal({
 
   const [modalState, setModalState] = useState<ModalState>("loading");
   const [clientEmail, setClientEmail] = useState("");
-  const [typedEmail, setTypedEmail] = useState(""); // for no_email state
+  const [typedEmail, setTypedEmail] = useState("");
   const [fromName, setFromName] = useState("");
   const [sendError, setSendError] = useState("");
   const [emailError, setEmailError] = useState("");
 
-  // On open: fetch profile + client in parallel
+  // Currency from invoice
+  const currency = invoice.currency ?? "INR";
+  const fmt = (amount: number) => formatCurrency(amount, currency);
+
   useEffect(() => {
     if (!user) return;
-
     let cancelled = false;
 
     const load = async () => {
@@ -146,11 +141,9 @@ export function SendInvoiceModal({
     };
 
     load();
-
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id, clientName]);
 
   const handleSend = async (emailToUse: string) => {
@@ -159,7 +152,6 @@ export function SendInvoiceModal({
     setModalState("sending");
 
     try {
-      // Step 1: Generate PDF as base64
       const profile = await getUserProfile();
       const pdfBase64 = await generateInvoicePDFBase64(
         invoice as ParsedInvoice,
@@ -168,7 +160,6 @@ export function SendInvoiceModal({
         profile
       );
 
-      // Step 2: POST to backend — sends email + updates status
       await api.post(
         `/invoices/${invoiceId}/send`,
         { pdfBase64, clientEmail: emailToUse.trim() },
@@ -206,7 +197,7 @@ export function SendInvoiceModal({
                   Send Invoice
                 </DialogTitle>
                 <DialogDescription className="text-xs text-gray-400 mt-0.5">
-                  {invoiceNumber} · {formatINR(total)}
+                  {invoiceNumber} · {fmt(total)}
                 </DialogDescription>
               </div>
             </div>
@@ -279,7 +270,6 @@ export function SendInvoiceModal({
         {/* ── No Email ── */}
         {modalState === "no_email" && (
           <div className="px-6 py-5 space-y-5">
-            {/* Client chip */}
             <div className="flex items-center gap-3 bg-gray-50 rounded-xl px-4 py-3">
               <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold text-sm flex-shrink-0">
                 {clientName.charAt(0).toUpperCase()}
@@ -292,7 +282,6 @@ export function SendInvoiceModal({
               </div>
             </div>
 
-            {/* Email input */}
             <div className="space-y-1.5">
               <Label className="text-xs font-semibold text-gray-500 flex items-center gap-1">
                 <Mail className="w-3 h-3" />
@@ -357,7 +346,6 @@ export function SendInvoiceModal({
         {/* ── Ready ── */}
         {modalState === "ready" && (
           <div className="px-6 py-5 space-y-5">
-            {/* Summary card */}
             <div className="bg-gray-50 rounded-2xl p-4 space-y-3">
               <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">
                 Sending to
@@ -389,7 +377,7 @@ export function SendInvoiceModal({
                 </div>
                 <div className="flex justify-between text-sm font-bold">
                   <span className="text-gray-900">Amount Due</span>
-                  <span className="text-indigo-600">{formatINR(total)}</span>
+                  <span className="text-indigo-600">{fmt(total)}</span>
                 </div>
               </div>
             </div>
@@ -468,9 +456,7 @@ export function SendInvoiceModal({
               </div>
               <div className="flex justify-between text-xs">
                 <span className="text-gray-400">Amount</span>
-                <span className="font-medium text-gray-700">
-                  {formatINR(total)}
-                </span>
+                <span className="font-medium text-gray-700">{fmt(total)}</span>
               </div>
               <div className="flex justify-between text-xs">
                 <span className="text-gray-400">Status</span>

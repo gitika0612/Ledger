@@ -21,6 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { formatCurrency } from "@/lib/currency";
 
 export interface SessionInvoice {
   messageId: string;
@@ -47,12 +48,8 @@ interface InvoicePanelProps {
 type SortOption = "newest" | "oldest" | "highest" | "lowest" | "az";
 type StatusFilter = "draft" | "confirmed";
 
-function formatINR(amount: number) {
-  return new Intl.NumberFormat("en-IN", {
-    style: "currency",
-    currency: "INR",
-    maximumFractionDigits: 0,
-  }).format(amount);
+function formatINR(amount: number, currency?: "INR" | "USD" | "EUR") {
+  return formatCurrency(amount, currency ?? "INR");
 }
 
 function parseMonthKey(key: string): Date {
@@ -464,7 +461,8 @@ export function InvoicePanel({
                                 items.reduce(
                                   (sum, si) => sum + si.invoice.total,
                                   0
-                                )
+                                ),
+                                items[0]?.invoice.currency
                               )}
                             </span>
                             {isGroupCollapsed ? (
@@ -579,7 +577,10 @@ export function InvoicePanel({
                                           </div>
                                           <div className="flex flex-col items-end gap-1 flex-shrink-0">
                                             <p className="text-sm font-bold text-gray-900">
-                                              {formatINR(si.invoice.total)}
+                                              {formatINR(
+                                                si.invoice.total,
+                                                si.invoice.currency
+                                              )}
                                             </p>
                                             {isSelected ? (
                                               <ChevronUp className="w-3.5 h-3.5 text-indigo-400" />

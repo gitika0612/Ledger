@@ -11,9 +11,25 @@ export interface SendInvoiceEmailParams {
   dueDate: Date;
   pdfBuffer: Buffer;
   invoiceId: string;
+  currency?: "INR" | "USD" | "EUR";
 }
 
-function formatINR(amount: number): string {
+function formatAmount(
+  amount: number,
+  currency: "INR" | "USD" | "EUR" = "INR"
+): string {
+  if (currency === "USD")
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: "USD",
+      maximumFractionDigits: 0,
+    }).format(amount);
+  if (currency === "EUR")
+    return new Intl.NumberFormat("de-DE", {
+      style: "currency",
+      currency: "EUR",
+      maximumFractionDigits: 0,
+    }).format(amount);
   return new Intl.NumberFormat("en-IN", {
     style: "currency",
     currency: "INR",
@@ -41,11 +57,13 @@ export async function sendInvoiceEmail(
     dueDate,
     pdfBuffer,
     invoiceId,
+    currency,
   } = params;
 
   const paymentLink = `${process.env.FRONTEND_URL}/pay/${invoiceId}`;
   const dueDateStr = formatDate(dueDate);
-  const totalStr = formatINR(total);
+
+  const totalStr = formatAmount(total, currency);
 
   const { error } = await resend.emails.send({
     from: `${fromName} <onboarding@resend.dev>`,

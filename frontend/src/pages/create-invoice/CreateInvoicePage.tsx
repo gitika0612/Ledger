@@ -85,6 +85,7 @@ export function CreateInvoicePage() {
                         <InvoiceMiniCard
                           clientName={si.invoice.clientName}
                           total={si.invoice.total}
+                          currency={si.invoice.currency}
                           status={si.status}
                           invoiceNumber={si.invoiceNumber}
                           onClick={() => {

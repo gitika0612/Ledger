@@ -4,6 +4,19 @@ import { Invoice } from "../models/Invoice";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 
+// Maps invoice currency to Stripe currency code
+function toStripeCurrency(currency?: string): string {
+  switch (currency?.toUpperCase()) {
+    case "USD":
+      return "usd";
+    case "EUR":
+      return "eur";
+    case "INR":
+    default:
+      return "inr";
+  }
+}
+
 export async function createCheckoutSession(req: Request, res: Response) {
   const { invoiceId } = req.body;
 
@@ -20,14 +33,16 @@ export async function createCheckoutSession(req: Request, res: Response) {
         .json({ error: "Invoice not available for payment" });
     }
 
+    const stripeCurrency = toStripeCurrency(invoice.currency);
+
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
       mode: "payment",
-      currency: "inr",
+      currency: stripeCurrency,
       line_items: [
         {
           price_data: {
-            currency: "inr",
+            currency: stripeCurrency,
             product_data: {
               name: `Invoice ${invoice.invoiceNumber}`,
               description: `${invoice.invoiceMonth ?? ""}`,
@@ -97,16 +112,13 @@ export async function handleStripeWebhook(req: Request, res: Response) {
     return res.status(400).json({ error: "Invalid signature" });
   }
 
-  // ── Handle successful payment ──
   if (event.type === "checkout.session.completed") {
     const session = event.data.object;
     const invoiceId = session.metadata?.invoiceId;
 
     if (invoiceId) {
       try {
-        await Invoice.findByIdAndUpdate(invoiceId, {
-          status: "paid",
-        });
+        await Invoice.findByIdAndUpdate(invoiceId, { status: "paid" });
         console.log(`✅ Invoice ${invoiceId} marked as paid`);
       } catch (err) {
         console.error("Failed to mark invoice as paid:", err);

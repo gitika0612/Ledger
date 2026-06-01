@@ -4,7 +4,7 @@ import { InvoiceAgentState, AgentResult } from "../state";
 import { ParsedInvoice, invoiceSchema } from "../schemas/invoiceSchema";
 import { GENERATOR_PROMPT } from "../prompts/invoicePrompt";
 import { findClientMatch } from "../../lib/clientMatcher";
-import { recalculateTotals, formatINR } from "../utils/invoiceUtils";
+import { recalculateTotals, formatCurrency } from "../utils/invoiceUtils";
 import { buildCurrencyContext } from "../utils/currencyService";
 
 export async function generatorNode(
@@ -59,10 +59,12 @@ export async function generatorNode(
       matchResult,
       agentResult: {
         action: "multi_created",
-        message: `Done! Split **${formatINR(
-          baseSubtotal
-        )}** (pre-GST) into **${parts} equal invoices** of **${formatINR(
-          subtotalPerPart
+        message: `Done! Split **${formatCurrency(
+          baseSubtotal,
+          finalInvoice.currency
+        )}** into **${parts} equal invoices** of **${formatCurrency(
+          subtotalPerPart,
+          finalInvoice.currency
         )}** each for **${
           finalInvoice.clientName
         }**. Review them in the side panel.`,
@@ -135,8 +137,9 @@ export async function generatorNode(
     action = "created";
     message = `Got it! Using **${
       matchResult.client?.name
-    }**'s saved details ✓\n\n${typeLabel} of **${formatINR(
-      finalInvoice.total
+    }**'s saved details ✓\n\n${typeLabel} of **${formatCurrency(
+      finalInvoice.total,
+      finalInvoice.currency
     )}** ready for **${
       finalInvoice.clientName
     }**. Review it in the side panel.`;
@@ -145,8 +148,9 @@ export async function generatorNode(
     message = `I found a saved client named **${matchResult.client?.name}**.\nIs **${finalInvoice.clientName}** the same client? Reply **same** or **different**.`;
   } else {
     action = "needs_client";
-    message = `${typeLabel} of **${formatINR(
-      finalInvoice.total
+    message = `${typeLabel} of **${formatCurrency(
+      finalInvoice.total,
+      finalInvoice.currency
     )}** is ready for **${
       finalInvoice.clientName
     }**!\n\nPlease share their contact details:\n\n**Email** *(required)*\n*(Optional: Address, City, State, Phone, GSTIN)*\n\nOr type **skip** to continue without details.`;

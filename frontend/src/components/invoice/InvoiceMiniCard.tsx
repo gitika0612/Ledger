@@ -1,26 +1,25 @@
 import { FileText, ChevronRight, CheckCircle2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { formatCurrency } from "@/lib/currency";
 
 interface InvoiceMiniCardProps {
   clientName: string;
   total: number;
+  currency?: "INR" | "USD" | "EUR";
   status: "draft" | "confirmed" | "sent" | "paid" | "overdue";
   invoiceNumber?: string;
   onClick: () => void;
 }
 
-function formatINR(amount: number) {
-  return new Intl.NumberFormat("en-IN", {
-    style: "currency",
-    currency: "INR",
-    maximumFractionDigits: 0,
-  }).format(amount);
+function formatINR(amount: number, currency?: "INR" | "USD" | "EUR") {
+  return formatCurrency(amount, currency ?? "INR");
 }
 
 export function InvoiceMiniCard({
   clientName,
   total,
+  currency,
   status,
   invoiceNumber,
   onClick,
@@ -95,7 +94,7 @@ export function InvoiceMiniCard({
             status === "confirmed" ? "text-emerald-600" : "text-gray-400"
           }`}
         >
-          {formatINR(total)} ·{" "}
+          {formatINR(total, currency)} ·{" "}
           {status === "confirmed" ? "View in panel →" : "Pending confirmation"}
         </p>
       </div>

@@ -2,8 +2,8 @@ import { ParsedInvoice } from "../schemas/invoiceSchema";
 
 /**
  * Recalculates all totals from line items.
- * Handles: normal invoices, discount invoices, GST variants.
- * Only sets schema-valid fields — no cgstPercent/sgstPercent/igstPercent.
+ * INR → uses gstPercent/gstAmount/cgst/sgst/igst fields
+ * USD/EUR → uses taxPercent/taxAmount/taxLabel fields
  */
 export function recalculateTotals(invoice: ParsedInvoice): ParsedInvoice {
   const subtotal = invoice.lineItems.reduce(
@@ -22,25 +22,55 @@ export function recalculateTotals(invoice: ParsedInvoice): ParsedInvoice {
       : 0;
 
   const taxableAmount = subtotal - discountAmount;
-  const gstPercent = invoice.gstPercent ?? 18;
-  const gstAmount = Math.round((taxableAmount * gstPercent) / 100);
+  const currency = invoice.currency ?? "INR";
 
-  const gstType = invoice.gstType || "CGST_SGST";
-  const cgstAmount = gstType === "CGST_SGST" ? Math.round(gstAmount / 2) : 0;
-  const sgstAmount = gstType === "CGST_SGST" ? gstAmount - cgstAmount : 0;
-  const igstAmount = gstType === "IGST" ? gstAmount : 0;
+  if (currency === "INR") {
+    // ── INR path: GST calculation ──
+    const gstPercent = invoice.gstPercent ?? 0;
+    const gstAmount = Math.round((taxableAmount * gstPercent) / 100);
+    const gstType = invoice.gstType || "CGST_SGST";
+    const cgstAmount = gstType === "CGST_SGST" ? Math.round(gstAmount / 2) : 0;
+    const sgstAmount = gstType === "CGST_SGST" ? gstAmount - cgstAmount : 0;
+    const igstAmount = gstType === "IGST" ? gstAmount : 0;
 
-  return {
-    ...invoice,
-    subtotal,
-    discountAmount,
-    taxableAmount,
-    gstAmount,
-    cgstAmount,
-    sgstAmount,
-    igstAmount,
-    total: taxableAmount + gstAmount,
-  };
+    return {
+      ...invoice,
+      currency,
+      subtotal,
+      discountAmount,
+      taxableAmount,
+      gstAmount,
+      cgstAmount,
+      sgstAmount,
+      igstAmount,
+      taxPercent: 0,
+      taxAmount: 0,
+      taxLabel: "",
+      total: taxableAmount + gstAmount,
+    };
+  } else {
+    // ── USD/EUR path: generic Tax/VAT calculation ──
+    const taxPercent = invoice.taxPercent ?? 0;
+    const taxAmount = Math.round((taxableAmount * taxPercent) / 100);
+    const taxLabel = invoice.taxLabel || (currency === "EUR" ? "VAT" : "Tax");
+
+    return {
+      ...invoice,
+      currency,
+      subtotal,
+      discountAmount,
+      taxableAmount,
+      taxPercent,
+      taxAmount,
+      taxLabel,
+      gstPercent: 0,
+      gstAmount: 0,
+      cgstAmount: 0,
+      sgstAmount: 0,
+      igstAmount: 0,
+      total: taxableAmount + taxAmount,
+    };
+  }
 }
 
 /**
@@ -66,7 +96,7 @@ export function diffLineItems(
       Math.abs(oldMatch.rate - newItem.rate) > 0.01
     ) {
       modified.push(
-        `**${newItem.description}** (₹${newItem.rate.toLocaleString(
+        `**${newItem.description}** (${newItem.rate.toLocaleString(
           "en-IN"
         )} × ${newItem.quantity})`
       );
@@ -98,7 +128,11 @@ export function diffLineItems(
   };
 }
 
-export function formatINR(amount: number): string {
+export function formatCurrency(
+  amount: number,
+  currency: "INR" | "USD" | "EUR" = "INR"
+): string {
   const abs = Math.abs(amount).toLocaleString("en-IN");
-  return amount < 0 ? `−₹${abs}` : `₹${abs}`;
+  const symbol = currency === "USD" ? "$" : currency === "EUR" ? "€" : "₹";
+  return amount < 0 ? `−${symbol}${abs}` : `${symbol}${abs}`;
 }

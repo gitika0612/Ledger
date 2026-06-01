@@ -17,6 +17,7 @@ import { useAuth, UserProfile } from "@/hooks/useAuth";
 import { getClientByName, upsertClient, ClientAPI } from "@/lib/api/clientApi";
 import { useUser } from "@clerk/clerk-react";
 import { updateInvoice } from "@/lib/api/invoiceApi";
+import { formatCurrency as formatCurrencyUtil } from "@/lib/currency";
 
 export interface LineItem {
   description: string;
@@ -40,6 +41,10 @@ export interface ParsedInvoice {
   sgstAmount?: number;
   igstAmount?: number;
   gstAmount: number;
+  // USD/EUR Tax fields
+  taxPercent?: number;
+  taxAmount?: number;
+  taxLabel?: string;
   discountType?: "percent" | "amount" | "none";
   discountValue?: number;
   discountAmount?: number;
@@ -51,6 +56,7 @@ export interface ParsedInvoice {
   paymentTermsDays: number;
   invoiceDate?: string;
   invoiceMonth?: string;
+  currency?: "INR" | "USD" | "EUR";
 }
 
 interface InvoicePreviewCardProps {
@@ -84,7 +90,6 @@ interface ValidationErrors {
   clientPincode?: string;
 }
 
-// ── Unit options ──
 const UNIT_DEFAULTS = [
   { value: "item", label: "Item" },
   { value: "hour", label: "Hour" },
@@ -194,12 +199,11 @@ function UnitSelector({
   );
 }
 
-function formatCurrency(amount: number) {
-  return new Intl.NumberFormat("en-IN", {
-    style: "currency",
-    currency: "INR",
-    maximumFractionDigits: 0,
-  }).format(amount);
+function formatCurrency(
+  amount: number,
+  currency?: "INR" | "USD" | "EUR"
+): string {
+  return formatCurrencyUtil(amount, currency ?? "INR");
 }
 
 function getInvoiceDates(invoice: ParsedInvoice) {
@@ -238,7 +242,6 @@ function FieldError({ message }: { message?: string }) {
   );
 }
 
-// Derive the effective GST % to display: if gstAmount is 0, show 0 regardless of stored gstPercent
 function effectiveGstPercent(invoice: ParsedInvoice): number {
   if (invoice.gstAmount === 0 && invoice.subtotal > 0) return 0;
   return invoice.gstPercent ?? 18;
@@ -258,36 +261,63 @@ function recalculateInvoiceTotals(invoice: ParsedInvoice): ParsedInvoice {
       ? Math.min(discountValue, subtotal)
       : 0;
   const taxableAmount = subtotal - discountAmount;
-  const gstAmount = Math.round(
-    (taxableAmount * (invoice.gstPercent ?? 0)) / 100
-  );
-  const gstType = invoice.gstType || "CGST_SGST";
-  const cgstAmount = gstType === "CGST_SGST" ? Math.round(gstAmount / 2) : 0;
-  const sgstAmount = gstType === "CGST_SGST" ? gstAmount - cgstAmount : 0;
-  const igstAmount = gstType === "IGST" ? gstAmount : 0;
-  const cgstPercent =
-    gstType === "CGST_SGST" ? (invoice.gstPercent ?? 0) / 2 : 0;
-  const sgstPercent =
-    gstType === "CGST_SGST" ? (invoice.gstPercent ?? 0) / 2 : 0;
-  const igstPercent = gstType === "IGST" ? invoice.gstPercent ?? 0 : 0;
-  return {
-    ...invoice,
-    subtotal,
-    discountAmount,
-    taxableAmount,
-    gstAmount,
-    gstType,
-    cgstPercent,
-    sgstPercent,
-    igstPercent,
-    cgstAmount,
-    sgstAmount,
-    igstAmount,
-    total: taxableAmount + gstAmount,
-  };
+  const currency = invoice.currency ?? "INR";
+
+  if (currency === "INR") {
+    // ── INR: GST path ──
+    const gstAmount = Math.round(
+      (taxableAmount * (invoice.gstPercent ?? 0)) / 100
+    );
+    const gstType = invoice.gstType || "CGST_SGST";
+    const cgstAmount = gstType === "CGST_SGST" ? Math.round(gstAmount / 2) : 0;
+    const sgstAmount = gstType === "CGST_SGST" ? gstAmount - cgstAmount : 0;
+    const igstAmount = gstType === "IGST" ? gstAmount : 0;
+    const cgstPercent =
+      gstType === "CGST_SGST" ? (invoice.gstPercent ?? 0) / 2 : 0;
+    const sgstPercent =
+      gstType === "CGST_SGST" ? (invoice.gstPercent ?? 0) / 2 : 0;
+    const igstPercent = gstType === "IGST" ? invoice.gstPercent ?? 0 : 0;
+    return {
+      ...invoice,
+      subtotal,
+      discountAmount,
+      taxableAmount,
+      gstAmount,
+      gstType,
+      cgstPercent,
+      sgstPercent,
+      igstPercent,
+      cgstAmount,
+      sgstAmount,
+      igstAmount,
+      taxPercent: 0,
+      taxAmount: 0,
+      taxLabel: "",
+      total: taxableAmount + gstAmount,
+    };
+  } else {
+    // ── USD/EUR: Tax/VAT path ──
+    const taxPercent = invoice.taxPercent ?? 0;
+    const taxAmount = Math.round((taxableAmount * taxPercent) / 100);
+    const taxLabel = invoice.taxLabel || (currency === "EUR" ? "VAT" : "Tax");
+    return {
+      ...invoice,
+      subtotal,
+      discountAmount,
+      taxableAmount,
+      taxPercent,
+      taxAmount,
+      taxLabel,
+      gstPercent: 0,
+      gstAmount: 0,
+      cgstAmount: 0,
+      sgstAmount: 0,
+      igstAmount: 0,
+      total: taxableAmount + taxAmount,
+    };
+  }
 }
 
-// Convert ISO date string to paymentTermsDays from invoice date
 function dueDateToTerms(
   invoiceDate: string | undefined,
   dueISO: string
@@ -359,25 +389,20 @@ export function InvoicePreviewCard({
 
   const errors = useMemo((): ValidationErrors => {
     const errs: ValidationErrors = {};
-
     if (!editedClientName.trim() || editedClientName.trim().length < 2)
       errs.clientName = "Client name must be at least 2 characters";
     if (editedClientEmail && !isValidEmail(editedClientEmail))
       errs.email = "Enter a valid email address";
     if (editedClientPincode && !/^[1-9][0-9]{5}$/.test(editedClientPincode))
       errs.clientPincode = "Enter a valid 6-digit pincode";
-
     const gst = Number(editedInvoice.gstPercent);
     if (isNaN(gst) || gst < 0 || gst > 100)
       errs.gstPercent = "GST must be 0–100";
-
     const terms = Number(editedInvoice.paymentTermsDays);
     if (isNaN(terms) || terms < 0 || terms > 365)
       errs.paymentTermsDays = "Payment terms must be 0–365 days";
-
     if (editedInvoice.lineItems.length === 0)
       errs.lineItems = "At least one line item is required";
-
     const lineItemErrors = editedInvoice.lineItems.map((item) => {
       const e: NonNullable<ValidationErrors["lineItemErrors"]>[number] = {};
       if (!String(item.description ?? "").trim())
@@ -393,7 +418,6 @@ export function InvoicePreviewCard({
     });
     if (lineItemErrors.some((e) => Object.keys(e).length > 0))
       errs.lineItemErrors = lineItemErrors;
-
     return errs;
   }, [editedClientName, editedClientEmail, editedClientPincode, editedInvoice]);
 
@@ -469,7 +493,6 @@ export function InvoicePreviewCard({
   ) => {
     const next = recalculateInvoiceTotals({ ...editedInvoice, [field]: value });
     setEditedInvoice(next);
-    // Sync due date when payment terms change
     if (field === "paymentTermsDays") {
       setDueDateISO(
         termsToISODueDate(editedInvoice.invoiceDate, Number(value))
@@ -550,6 +573,10 @@ export function InvoicePreviewCard({
     current.discountType !== "none" &&
     (current.discountValue || 0) > 0;
 
+  // Currency for display — use current invoice's currency
+  const currency = current.currency ?? "INR";
+  const isINR = currency === "INR";
+
   return (
     <div className="bg-white rounded-2xl overflow-hidden w-full border border-gray-100 shadow-sm">
       {/* ── EDIT MODE ── */}
@@ -561,7 +588,6 @@ export function InvoicePreviewCard({
               Client Details
             </p>
             <div className="grid grid-cols-2 gap-3">
-              {/* Client name */}
               <div className="col-span-2">
                 <Label className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1 block">
                   Client Name *
@@ -585,7 +611,6 @@ export function InvoicePreviewCard({
                 )}
               </div>
 
-              {/* Client email */}
               <div className="col-span-2">
                 <Label className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1 block">
                   Client Email
@@ -602,7 +627,6 @@ export function InvoicePreviewCard({
                 {touched.email && <FieldError message={errors.email} />}
               </div>
 
-              {/* Address */}
               <div className="col-span-2">
                 <Label className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1 block">
                   Address
@@ -615,7 +639,6 @@ export function InvoicePreviewCard({
                 />
               </div>
 
-              {/* City */}
               <div>
                 <Label className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1 block">
                   City
@@ -632,7 +655,6 @@ export function InvoicePreviewCard({
                 />
               </div>
 
-              {/* State */}
               <div>
                 <Label className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1 block">
                   State
@@ -649,7 +671,6 @@ export function InvoicePreviewCard({
                 />
               </div>
 
-              {/* Pincode */}
               <div>
                 <Label className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1 block">
                   Pincode
@@ -682,63 +703,123 @@ export function InvoicePreviewCard({
               Invoice Settings
             </p>
             <div className="grid grid-cols-2 gap-3">
-              {/* GST % */}
-              <div>
+              {/* Currency badge — read only in edit mode */}
+              <div className="col-span-2">
                 <Label className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1 block">
-                  GST %
-                </Label>
-                <Input
-                  type="number"
-                  min={0}
-                  max={100}
-                  value={
-                    editedInvoice.gstPercent === 0
-                      ? ""
-                      : editedInvoice.gstPercent
-                  }
-                  onChange={(e) => {
-                    const v =
-                      e.target.value === ""
-                        ? 0
-                        : Math.min(100, Math.max(0, Number(e.target.value)));
-                    handleFieldChange("gstPercent", v);
-                  }}
-                  onBlur={() => markTouched("gstPercent")}
-                  placeholder="Enter GST"
-                  className={`rounded-xl text-sm focus-visible:ring-indigo-400 ${
-                    touched.gstPercent && errors.gstPercent
-                      ? "border-red-300"
-                      : ""
-                  }`}
-                />
-                {touched.gstPercent && (
-                  <FieldError message={errors.gstPercent} />
-                )}
-              </div>
-
-              {/* GST Type */}
-              <div>
-                <Label className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1 block">
-                  GST Type
+                  Currency
                 </Label>
                 <div className="flex gap-2">
-                  {(["CGST_SGST", "IGST"] as const).map((type) => (
+                  {(["INR", "USD", "EUR"] as const).map((c) => (
                     <button
-                      key={type}
-                      onClick={() => handleFieldChange("gstType", type)}
-                      className={`flex-1 h-9 rounded-xl text-xs font-semibold border transition-all ${
-                        (editedInvoice.gstType || "CGST_SGST") === type
+                      key={c}
+                      onClick={() => handleFieldChange("currency", c)}
+                      className={`px-4 h-9 rounded-xl text-xs font-semibold border transition-all ${
+                        (editedInvoice.currency ?? "INR") === c
                           ? "bg-indigo-50 border-indigo-200 text-indigo-700"
                           : "bg-gray-50 border-gray-200 text-gray-500 hover:bg-gray-100"
                       }`}
                     >
-                      {type === "CGST_SGST" ? "CGST + SGST" : "IGST"}
+                      {c === "INR" ? "₹ INR" : c === "USD" ? "$ USD" : "€ EUR"}
                     </button>
                   ))}
                 </div>
               </div>
 
-              {/* Payment Terms */}
+              {/* GST — only for INR */}
+              {(editedInvoice.currency ?? "INR") === "INR" && (
+                <>
+                  <div>
+                    <Label className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1 block">
+                      GST %
+                    </Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={100}
+                      value={
+                        editedInvoice.gstPercent === 0
+                          ? ""
+                          : editedInvoice.gstPercent
+                      }
+                      onChange={(e) => {
+                        const v =
+                          e.target.value === ""
+                            ? 0
+                            : Math.min(
+                                100,
+                                Math.max(0, Number(e.target.value))
+                              );
+                        handleFieldChange("gstPercent", v);
+                      }}
+                      onBlur={() => markTouched("gstPercent")}
+                      placeholder="Enter GST"
+                      className={`rounded-xl text-sm focus-visible:ring-indigo-400 ${
+                        touched.gstPercent && errors.gstPercent
+                          ? "border-red-300"
+                          : ""
+                      }`}
+                    />
+                    {touched.gstPercent && (
+                      <FieldError message={errors.gstPercent} />
+                    )}
+                  </div>
+
+                  <div>
+                    <Label className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1 block">
+                      GST Type
+                    </Label>
+                    <div className="flex gap-2">
+                      {(["CGST_SGST", "IGST"] as const).map((type) => (
+                        <button
+                          key={type}
+                          onClick={() => handleFieldChange("gstType", type)}
+                          className={`flex-1 h-9 rounded-xl text-xs font-semibold border transition-all ${
+                            (editedInvoice.gstType || "CGST_SGST") === type
+                              ? "bg-indigo-50 border-indigo-200 text-indigo-700"
+                              : "bg-gray-50 border-gray-200 text-gray-500 hover:bg-gray-100"
+                          }`}
+                        >
+                          {type === "CGST_SGST" ? "CGST + SGST" : "IGST"}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* Tax % field — USD/EUR only */}
+              {(editedInvoice.currency ?? "INR") !== "INR" && (
+                <div className="col-span-2">
+                  <Label className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1 block">
+                    {editedInvoice.currency === "EUR" ? "VAT %" : "Tax %"}
+                  </Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={
+                      (editedInvoice.taxPercent ?? 0) === 0
+                        ? ""
+                        : editedInvoice.taxPercent
+                    }
+                    onChange={(e) => {
+                      const v =
+                        e.target.value === ""
+                          ? 0
+                          : Math.min(100, Math.max(0, Number(e.target.value)));
+                      handleFieldChange("taxPercent", v);
+                    }}
+                    placeholder={`Enter ${
+                      editedInvoice.currency === "EUR" ? "VAT" : "Tax"
+                    } %`}
+                    className="rounded-xl text-sm focus-visible:ring-indigo-400"
+                  />
+                  <p className="text-xs text-gray-400 mt-1">
+                    Leave 0 for tax-exempt invoices
+                  </p>
+                </div>
+              )}
+
               <div>
                 <Label className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1 block">
                   Payment Terms (days)
@@ -772,7 +853,6 @@ export function InvoicePreviewCard({
                 )}
               </div>
 
-              {/* Due Date */}
               <div>
                 <Label className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1 block">
                   Due Date
@@ -785,7 +865,6 @@ export function InvoicePreviewCard({
                 />
               </div>
 
-              {/* Discount */}
               <div className="col-span-2">
                 <Label className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1 block">
                   Discount
@@ -805,7 +884,13 @@ export function InvoicePreviewCard({
                         ? "No discount"
                         : type === "percent"
                         ? "%"
-                        : "₹ Fixed"}
+                        : `${
+                            currency === "USD"
+                              ? "$"
+                              : currency === "EUR"
+                              ? "€"
+                              : "₹"
+                          } Fixed`}
                     </button>
                   ))}
                   {editedInvoice.discountType &&
@@ -862,7 +947,6 @@ export function InvoicePreviewCard({
                         : "border-gray-100"
                     }`}
                   >
-                    {/* Description + delete */}
                     <div className="flex items-center gap-2 mb-2">
                       <div className="flex-1">
                         <Input
@@ -908,56 +992,62 @@ export function InvoicePreviewCard({
                       </Button>
                     </div>
 
-                    {/* HSN/SAC */}
-                    <div className="mb-2">
-                      <p className="text-xs text-gray-400 mb-1">HSN/SAC Code</p>
-                      <div className="flex gap-1">
-                        <div className="flex-1">
-                          <Input
-                            value={item.hsnSacCode || ""}
-                            onChange={(e) => {
-                              // Only digits, max 8
-                              const v = e.target.value
-                                .replace(/\D/g, "")
-                                .slice(0, 8);
-                              handleLineItemChange(index, "hsnSacCode", v);
-                            }}
-                            onBlur={() =>
-                              markTouched(`item_${index}_hsnSacCode`)
-                            }
-                            placeholder="Enter HSN/SAC code"
-                            maxLength={8}
-                            className={`rounded-lg text-xs bg-white focus-visible:ring-indigo-400 h-8 ${
-                              iHsnTouched && itemErr?.hsnSacCode
-                                ? "border-red-300"
-                                : ""
-                            }`}
-                          />
-                          {iHsnTouched && (
-                            <FieldError message={itemErr?.hsnSacCode} />
-                          )}
-                        </div>
+                    {/* HSN/SAC — only show for INR */}
+                    {(editedInvoice.currency ?? "INR") === "INR" && (
+                      <div className="mb-2">
+                        <p className="text-xs text-gray-400 mb-1">
+                          HSN/SAC Code
+                        </p>
                         <div className="flex gap-1">
-                          {(["HSN", "SAC"] as const).map((type) => (
-                            <button
-                              key={type}
-                              onClick={() =>
-                                handleLineItemChange(index, "hsnSacType", type)
+                          <div className="flex-1">
+                            <Input
+                              value={item.hsnSacCode || ""}
+                              onChange={(e) => {
+                                const v = e.target.value
+                                  .replace(/\D/g, "")
+                                  .slice(0, 8);
+                                handleLineItemChange(index, "hsnSacCode", v);
+                              }}
+                              onBlur={() =>
+                                markTouched(`item_${index}_hsnSacCode`)
                               }
-                              className={`px-2 h-8 rounded-lg text-[10px] font-bold border transition-all ${
-                                (item.hsnSacType || "SAC") === type
-                                  ? "bg-indigo-50 border-indigo-200 text-indigo-700"
-                                  : "bg-gray-50 border-gray-200 text-gray-400"
+                              placeholder="Enter HSN/SAC code"
+                              maxLength={8}
+                              className={`rounded-lg text-xs bg-white focus-visible:ring-indigo-400 h-8 ${
+                                iHsnTouched && itemErr?.hsnSacCode
+                                  ? "border-red-300"
+                                  : ""
                               }`}
-                            >
-                              {type}
-                            </button>
-                          ))}
+                            />
+                            {iHsnTouched && (
+                              <FieldError message={itemErr?.hsnSacCode} />
+                            )}
+                          </div>
+                          <div className="flex gap-1">
+                            {(["HSN", "SAC"] as const).map((type) => (
+                              <button
+                                key={type}
+                                onClick={() =>
+                                  handleLineItemChange(
+                                    index,
+                                    "hsnSacType",
+                                    type
+                                  )
+                                }
+                                className={`px-2 h-8 rounded-lg text-[10px] font-bold border transition-all ${
+                                  (item.hsnSacType || "SAC") === type
+                                    ? "bg-indigo-50 border-indigo-200 text-indigo-700"
+                                    : "bg-gray-50 border-gray-200 text-gray-400"
+                                }`}
+                              >
+                                {type}
+                              </button>
+                            ))}
+                          </div>
                         </div>
                       </div>
-                    </div>
+                    )}
 
-                    {/* Qty / Unit / Rate / Amount */}
                     <div className="grid grid-cols-4 gap-2">
                       <div>
                         <p className="text-xs text-gray-400 mb-1">Qty</p>
@@ -1001,7 +1091,15 @@ export function InvoicePreviewCard({
                         {iUnitTouched && <FieldError message={itemErr?.unit} />}
                       </div>
                       <div>
-                        <p className="text-xs text-gray-400 mb-1">Rate (₹)</p>
+                        <p className="text-xs text-gray-400 mb-1">
+                          Rate (
+                          {currency === "USD"
+                            ? "$"
+                            : currency === "EUR"
+                            ? "€"
+                            : "₹"}
+                          )
+                        </p>
                         <Input
                           type="number"
                           min={0}
@@ -1033,7 +1131,10 @@ export function InvoicePreviewCard({
                         <p className="text-xs text-gray-400 mb-1">Amount</p>
                         <div className="h-8 rounded-lg bg-indigo-50 border border-indigo-100 flex items-center px-2">
                           <span className="text-xs font-semibold text-indigo-700">
-                            {formatCurrency(item.amount)}
+                            {formatCurrency(
+                              item.amount,
+                              editedInvoice.currency
+                            )}
                           </span>
                         </div>
                       </div>
@@ -1148,6 +1249,12 @@ export function InvoicePreviewCard({
             ) : (
               <p className="text-xs text-gray-300 mt-0.5">Draft</p>
             )}
+            {/* Currency badge */}
+            {currency !== "INR" && (
+              <span className="inline-block mt-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-600 border border-indigo-100">
+                {currency}
+              </span>
+            )}
           </div>
         </div>
 
@@ -1232,22 +1339,30 @@ export function InvoicePreviewCard({
                 Description
               </p>
             </div>
-            <div className="col-span-2">
-              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                HSN/SAC
-              </p>
-            </div>
-            <div className="col-span-2 text-center">
+            {isINR && (
+              <div className="col-span-2">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                  HSN/SAC
+                </p>
+              </div>
+            )}
+            <div
+              className={`${isINR ? "col-span-2" : "col-span-3"} text-center`}
+            >
               <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
                 Qty
               </p>
             </div>
-            <div className="col-span-2 text-right">
+            <div
+              className={`${isINR ? "col-span-2" : "col-span-2"} text-right`}
+            >
               <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
                 Rate
               </p>
             </div>
-            <div className="col-span-2 text-right">
+            <div
+              className={`${isINR ? "col-span-2" : "col-span-3"} text-right`}
+            >
               <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
                 Amount
               </p>
@@ -1267,24 +1382,40 @@ export function InvoicePreviewCard({
                     <p className="text-xs text-gray-400 mt-0.5">{item.unit}</p>
                   )}
                 </div>
-                <div className="col-span-2">
-                  {item.hsnSacCode ? (
-                    <span className="text-xs font-mono text-gray-500 bg-gray-50 px-1.5 py-0.5 rounded">
-                      {item.hsnSacCode}
-                    </span>
-                  ) : (
-                    <span className="text-xs text-gray-300">—</span>
-                  )}
-                </div>
-                <div className="col-span-2 text-center">
+                {isINR && (
+                  <div className="col-span-2">
+                    {item.hsnSacCode ? (
+                      <span className="text-xs font-mono text-gray-500 bg-gray-50 px-1.5 py-0.5 rounded">
+                        {item.hsnSacCode}
+                      </span>
+                    ) : (
+                      <span className="text-xs text-gray-300">—</span>
+                    )}
+                  </div>
+                )}
+                <div
+                  className={`${
+                    isINR ? "col-span-2" : "col-span-3"
+                  } text-center`}
+                >
                   <p className="text-sm text-gray-600">{item.quantity}</p>
                 </div>
-                <div className="col-span-2 text-right">
-                  <p className="text-sm text-gray-600">{item.rate}</p>
+                <div
+                  className={`${
+                    isINR ? "col-span-2" : "col-span-2"
+                  } text-right`}
+                >
+                  <p className="text-sm text-gray-600">
+                    {formatCurrency(item.rate, currency)}
+                  </p>
                 </div>
-                <div className="col-span-2 text-right">
+                <div
+                  className={`${
+                    isINR ? "col-span-2" : "col-span-3"
+                  } text-right`}
+                >
                   <p className="text-sm font-semibold text-gray-900">
-                    {item.amount}
+                    {formatCurrency(item.amount, currency)}
                   </p>
                 </div>
               </div>
@@ -1298,7 +1429,7 @@ export function InvoicePreviewCard({
             <div className="flex justify-between">
               <span className="text-xs text-gray-500">Subtotal</span>
               <span className="text-xs font-medium text-gray-700">
-                {formatCurrency(current.subtotal)}
+                {formatCurrency(current.subtotal, currency)}
               </span>
             </div>
             {hasDiscount && (
@@ -1311,18 +1442,24 @@ export function InvoicePreviewCard({
                       : ""}
                   </span>
                   <span className="text-xs font-medium">
-                    − {formatCurrency(current.discountAmount || 0)}
+                    − {formatCurrency(current.discountAmount || 0, currency)}
                   </span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-xs text-gray-500">Taxable Amount</span>
                   <span className="text-xs font-medium text-gray-700">
-                    {formatCurrency(current.taxableAmount || current.subtotal)}
+                    {formatCurrency(
+                      current.taxableAmount || current.subtotal,
+                      currency
+                    )}
                   </span>
                 </div>
               </>
             )}
-            {displayGst > 0 &&
+
+            {/* GST rows — INR only */}
+            {isINR &&
+              displayGst > 0 &&
               (showCgstSgst ? (
                 <>
                   <div className="flex justify-between">
@@ -1331,7 +1468,8 @@ export function InvoicePreviewCard({
                     </span>
                     <span className="text-xs font-medium text-gray-700">
                       {formatCurrency(
-                        current.cgstAmount || current.gstAmount / 2
+                        current.cgstAmount || current.gstAmount / 2,
+                        currency
                       )}
                     </span>
                   </div>
@@ -1341,7 +1479,8 @@ export function InvoicePreviewCard({
                     </span>
                     <span className="text-xs font-medium text-gray-700">
                       {formatCurrency(
-                        current.sgstAmount || current.gstAmount / 2
+                        current.sgstAmount || current.gstAmount / 2,
+                        currency
                       )}
                     </span>
                   </div>
@@ -1352,14 +1491,33 @@ export function InvoicePreviewCard({
                     IGST ({current.igstPercent || displayGst}%)
                   </span>
                   <span className="text-xs font-medium text-gray-700">
-                    {formatCurrency(current.igstAmount || current.gstAmount)}
+                    {formatCurrency(
+                      current.igstAmount || current.gstAmount,
+                      currency
+                    )}
                   </span>
                 </div>
               ))}
+
+            {/* Tax/VAT row — USD/EUR only */}
+            {!isINR && (current.taxAmount || 0) > 0 && (
+              <div className="flex justify-between">
+                <span className="text-xs text-gray-500">
+                  {current.taxLabel || (currency === "EUR" ? "VAT" : "Tax")}
+                  {(current.taxPercent || 0) > 0
+                    ? ` (${current.taxPercent}%)`
+                    : ""}
+                </span>
+                <span className="text-xs font-medium text-gray-700">
+                  {formatCurrency(current.taxAmount || 0, currency)}
+                </span>
+              </div>
+            )}
+
             <div className="flex justify-between pt-2 border-t border-gray-200">
               <span className="text-sm font-bold text-gray-900">Total</span>
               <span className="text-sm font-bold text-gray-900">
-                {formatCurrency(current.total)}
+                {formatCurrency(current.total, currency)}
               </span>
             </div>
           </div>
