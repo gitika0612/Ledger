@@ -4,6 +4,7 @@ import { findClientMatch } from "../../lib/clientMatcher";
 import { Invoice } from "../../models/Invoice";
 import { ParsedInvoice } from "../schemas/invoiceSchema";
 import { recalculateTotals, formatCurrency } from "../utils/invoiceUtils";
+import { copierNode } from "./copierNode";
 
 const PENDING_REPLY_PROMPT = `You are handling a conversational reply in an invoice chat assistant.
 
@@ -109,7 +110,33 @@ export async function pendingReplyNode(
     };
   }
 
-  // ── Issue 4 fix: awaiting_edit_ambiguity — user replies with invoice number or "latest" ──
+  // ── awaiting_ambiguity: user was asked which invoice to COPY ──
+  // They replied with an invoice number like "INV-2026-002"
+  if (pendingState.status === "awaiting_ambiguity") {
+    const invoiceRefMatch = prompt.match(/INV-\d{4}-\d+/i);
+    const resolvedRef = invoiceRefMatch?.[0]?.trim() ?? prompt.trim();
+
+    if (!resolvedRef) {
+      return {
+        agentResult: {
+          action: "unclear",
+          message: `Please reply with a valid invoice number (e.g. **INV-2026-001**).`,
+        },
+      };
+    }
+
+    // Re-invoke copierNode with the specific invoice ref resolved.
+    // Use the original prompt so the destination client name (e.g. "Ankit") is preserved.
+    const copierResult = await copierNode({
+      ...state,
+      targetRef: resolvedRef,
+      prompt: pendingState.originalPrompt ?? state.prompt,
+    });
+
+    return copierResult;
+  }
+
+  // ── awaiting_edit_ambiguity: user was asked which invoice to EDIT ──
   if (pendingState.status === "awaiting_edit_ambiguity") {
     const replyLower = prompt.toLowerCase().trim();
     const invoiceNumberMatch = prompt.match(/INV-\d{4}-\d+/i);
@@ -124,7 +151,6 @@ export async function pendingReplyNode(
       }
     } else if (replyLower === "latest" || replyLower === "most recent") {
       targetRef = "last";
-      // Fetch the most recent invoice for this user from DB
       if (userId) {
         try {
           const last = await Invoice.findOne({ userId })

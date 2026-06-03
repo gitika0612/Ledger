@@ -55,7 +55,7 @@ function findSourceBlock(sessionContext: string, ref: string): string | null {
   for (const block of blocks) {
     const cn = block.clientName.toLowerCase();
     const invRef = block.ref.toLowerCase();
-    if (lower && (invRef === lower || cn === lower)) {
+    if (lower && (invRef === lower || cn === lower || cn.includes(lower))) {
       matching.push(block.raw);
     }
   }
@@ -102,12 +102,28 @@ function parseBlockToInvoice(block: string): ParsedInvoice | null {
   const termsMatch = block.match(/Payment Terms:\s*(\d+)/i);
   const clientMatch = block.match(/Client:\s*(.+)/i);
   const monthMatch = block.match(/Invoice Month:\s*(.+)/i);
+  const discountLineMatch = block.match(
+    /Discount:\s*(percent|amount)\s+([\d.]+)/i
+  );
+  const discountType = discountLineMatch
+    ? (discountLineMatch[1].toLowerCase() as "percent" | "amount")
+    : ("none" as const);
+  const discountValue = discountLineMatch
+    ? parseFloat(discountLineMatch[2])
+    : 0;
 
   if (!totalMatch) return null;
 
   const subtotal = parseInt((subtotalMatch?.[1] ?? "0").replace(/,/g, ""));
   const total = parseInt((totalMatch[1] ?? "0").replace(/,/g, ""));
-  const gstAmount = total - subtotal;
+  const discountAmount =
+    discountType === "percent"
+      ? Math.round((subtotal * discountValue) / 100)
+      : discountType === "amount"
+      ? discountValue
+      : 0;
+  const taxableAmount = subtotal - discountAmount;
+  const gstAmount = total - taxableAmount;
 
   const fallbackLineItems = [
     {
@@ -143,10 +159,10 @@ function parseBlockToInvoice(block: string): ParsedInvoice | null {
       taxLabel: "",
       paymentTermsDays: parseInt(termsMatch?.[1] ?? "15"),
       subtotal,
-      taxableAmount: subtotal,
-      discountType: "none" as const,
-      discountValue: 0,
-      discountAmount: 0,
+      taxableAmount,
+      discountType,
+      discountValue,
+      discountAmount,
       notes: "",
       total,
       invoiceDate: new Date().toISOString().split("T")[0],
@@ -184,10 +200,10 @@ function parseBlockToInvoice(block: string): ParsedInvoice | null {
       taxLabel,
       paymentTermsDays: parseInt(termsMatch?.[1] ?? "15"),
       subtotal,
-      taxableAmount: subtotal,
-      discountType: "none" as const,
-      discountValue: 0,
-      discountAmount: 0,
+      taxableAmount,
+      discountType,
+      discountValue,
+      discountAmount,
       notes: "",
       total,
       invoiceDate: new Date().toISOString().split("T")[0],
@@ -246,30 +262,146 @@ async function fetchLastConfirmedInvoice(
 }
 
 // ── Parse amount override from prompt for a specific currency ──
+// Supports: ₹50,000 / ₹1L / ₹1lakh / ₹50k / Rs 50000 / $5k / €2000
+// Does NOT support word numbers ("fifty k", "1 lakh" without symbol) — those fall to LLM
 function parseAmountOverride(
   prompt: string,
   currency: "INR" | "USD" | "EUR"
 ): number | null {
   let match: RegExpMatchArray | null = null;
+
   if (currency === "USD") {
     match = prompt.match(
-      /\$\s*([\d,]+(?:\.\d+)?k?)|USD\s*([\d,]+(?:\.\d+)?k?)/i
+      /\$\s*([\d,]+(?:\.\d+)?(?:k|thousand)?)|USD\s*([\d,]+(?:\.\d+)?(?:k|thousand)?)/i
     );
   } else if (currency === "EUR") {
     match = prompt.match(
-      /€\s*([\d,]+(?:\.\d+)?k?)|EUR\s*([\d,]+(?:\.\d+)?k?)/i
+      /€\s*([\d,]+(?:\.\d+)?(?:k|thousand)?)|EUR\s*([\d,]+(?:\.\d+)?(?:k|thousand)?)/i
     );
   } else {
+    // INR: ₹, Rs, INR — support k, L, lakh suffixes
     match = prompt.match(
-      /₹\s*([\d,]+(?:\.\d+)?k?)|Rs\.?\s*([\d,]+(?:\.\d+)?k?)|INR\s*([\d,]+(?:\.\d+)?k?)/i
+      /(?:₹|Rs\.?|INR)\s*([\d,]+(?:\.\d+)?(?:k|L|lakh|thousand)?)/i
     );
   }
+
   if (!match) return null;
-  const raw = (match[1] || match[2] || match[3] || "").replace(/,/g, "");
+  const raw = (match[1] || match[2] || "").replace(/,/g, "").trim();
   if (!raw) return null;
-  const isK = raw.toLowerCase().endsWith("k");
-  const num = parseFloat(isK ? raw.slice(0, -1) : raw);
-  return isK ? num * 1000 : num;
+
+  const lower = raw.toLowerCase();
+  const num = parseFloat(lower);
+  if (isNaN(num)) return null;
+
+  if (lower.endsWith("lakh") || lower.endsWith("l")) return num * 100000;
+  if (lower.endsWith("thousand") || lower.endsWith("k")) return num * 1000;
+  return num;
+}
+
+// ── All month names — used to exclude them from client name extraction ──
+const ALL_MONTHS = new Set([
+  "january",
+  "february",
+  "march",
+  "april",
+  "may",
+  "june",
+  "july",
+  "august",
+  "september",
+  "october",
+  "november",
+  "december",
+  "jan",
+  "feb",
+  "mar",
+  "apr",
+  "jun",
+  "jul",
+  "aug",
+  "sep",
+  "oct",
+  "nov",
+  "dec",
+]);
+
+// ── Extract destination client name from the original prompt ──
+// Returns null when no valid destination found (same-client-different-month copy).
+//
+// Handles patterns like:
+//   "same as before for new client meera"   → "meera"
+//   "same invoice but for ankit"            → "ankit"
+//   "copy priya's invoice for kartik"       → "kartik"
+//   "same invoice for meera"                → "meera"
+//   "same invoice but for june"             → null  (month, not a client)
+//   "same invoice as last month for priya but for june" → null (priya is source)
+function extractDestinationClient(prompt: string): string | null {
+  const STOP_WORDS = new Set([
+    "invoice",
+    "bill",
+    "same",
+    "last",
+    "previous",
+    "month",
+    "this",
+    "that",
+    "the",
+    "a",
+    "an",
+    "with",
+    "and",
+    "or",
+    "but",
+    "for",
+    "to",
+    "from",
+    "in",
+    "on",
+    "at",
+    "of",
+    "copy",
+    "create",
+    "make",
+    "generate",
+    "next",
+    "again",
+    "work",
+    "time",
+    "before",
+    "new",
+    "client",
+    "named",
+    ...Array.from(ALL_MONTHS),
+  ]);
+
+  // Try patterns from most specific to least specific.
+  // Each pattern captures the FINAL word after all qualifiers are consumed.
+  const specificPatterns: RegExp[] = [
+    // "but for X" — most reliable signal of destination
+    /but\s+for\s+(?:(?:a\s+)?new\s+)?(?:client\s+)?(?:named\s+)?([A-Za-z]+)\s*$/i,
+    /but\s+for\s+(?:(?:a\s+)?new\s+)?(?:client\s+)?(?:named\s+)?([A-Za-z]+)/i,
+
+    // "for new client X" / "for a new client X" / "for a new client named X"
+    /for\s+(?:a\s+)?new\s+client\s+(?:named\s+)?([A-Za-z]+)/i,
+
+    // "client named X" / "named X"
+    /client\s+(?:named\s+)?([A-Za-z]+)\s*$/i,
+    /named\s+([A-Za-z]+)\s*$/i,
+
+    // "for X" at very end of string — last resort
+    /for\s+([A-Za-z]+)\s*$/i,
+  ];
+
+  for (const pattern of specificPatterns) {
+    const match = prompt.match(pattern);
+    const candidate = match?.[1]?.trim();
+    if (candidate && !STOP_WORDS.has(candidate.toLowerCase())) {
+      return candidate;
+    }
+  }
+
+  // No valid destination client found — caller should use source client name
+  return null;
 }
 
 export async function copierNode(
@@ -277,20 +409,31 @@ export async function copierNode(
 ): Promise<Partial<InvoiceAgentState>> {
   console.log("=== COPIER NODE ===");
   console.log("targetRef:", state.targetRef);
+  console.log("prompt:", state.prompt);
 
   const ref = state.targetRef || "";
+
+  // ── If ref is a specific invoice number (e.g. INV-2026-002), skip ambiguity check ──
+  const isInvoiceRef = /^INV-\d{4}-\d+$/i.test(ref);
+
   const hasSession =
     state.sessionContext &&
     state.sessionContext !== "No existing invoices in this session.";
 
-  // ── Multiple matches → ask which one ──
-  if (ref && hasSession && ref !== "last" && ref !== "last one") {
+  // ── Multiple matches → ask which one (only when ref is a client name, not an INV number) ──
+  if (
+    !isInvoiceRef &&
+    ref &&
+    hasSession &&
+    ref !== "last" &&
+    ref !== "last one"
+  ) {
     const matches = findMatchingBlocks(state.sessionContext, ref);
     if (matches.length > 1) {
       const list = matches
         .map(
           (m) =>
-            `• **${m.ref || "Draft"}** — ${m.month || "unknown"} — ${m.total}`
+            `• **${m.ref || "Draft"}** — ${m.month || "unknown"} — ₹${m.total}`
         )
         .join("\n");
       return {
@@ -313,13 +456,18 @@ export async function copierNode(
     (promptLower.includes("same as last") ||
       promptLower.includes("last one") ||
       promptLower.includes("like last time") ||
-      promptLower.includes("previous invoice"));
+      promptLower.includes("previous invoice") ||
+      promptLower.includes("last month") ||
+      promptLower.includes("pichle mahine") ||
+      promptLower.includes("same work"));
 
   let sourceInv: ParsedInvoice | null = null;
 
   if (state.parsedInvoice && state.parsedInvoice.clientName) {
     sourceInv = state.parsedInvoice;
+    console.log("✅ Priority 1: using parsedInvoice from state");
   } else if (hasSession) {
+    // When ref is an invoice number, search by ref; otherwise search by client name
     const lookupRef = ref || "last";
     const block = findSourceBlock(state.sessionContext, lookupRef);
     if (block) {
@@ -329,9 +477,7 @@ export async function copierNode(
           "✅ Priority 2: parsed from session context, client:",
           sourceInv.clientName,
           "currency:",
-          sourceInv.currency,
-          "taxPercent:",
-          sourceInv.taxPercent
+          sourceInv.currency
         );
     }
     if (!sourceInv) {
@@ -365,20 +511,21 @@ export async function copierNode(
     };
   }
 
-  //  Extract new client name — greedy match, handles "for X but" pattern ──
-  const namedMatch =
-    state.prompt.match(/named\s+([A-Z][a-zA-Z]+)/i)?.[1] ||
-    state.prompt.match(/but\s+for\s+([A-Z][a-zA-Z]+)/i)?.[1] ||
-    state.prompt.match(
-      /for\s+([A-Z][a-zA-Z]+)(?:\s+but|\s+with|\s+in\s|\s*$|,)/i
-    )?.[1] ||
-    state.prompt.match(
-      /for\s+a\s+(?:new\s+)?client\s+(?:named\s+)?([A-Z][a-zA-Z]+)/i
-    )?.[1] ||
-    "";
-  const newClientName = namedMatch.trim() || "Client";
+  // ── Extract destination client name ──
+  // Three cases:
+  //   1. "same invoice but for Ankit"           → destination = "Ankit"  (different client)
+  //   2. "same invoice as last month for Priya but for June" → destination = null → use source client "Priya"
+  //   3. "same invoice but for June"            → destination = null → use source client
+  //
+  // extractDestinationClient returns null when the only "for X" candidate is a month name,
+  // which signals a same-client-different-month copy.
+  const extractedDestination = extractDestinationClient(state.prompt);
+  // Fall back to the source invoice's client name for same-client copies
+  const newClientName = extractedDestination ?? sourceInv.clientName;
 
-  //  Detect currency override in prompt ──
+  console.log("✅ Destination client:", newClientName);
+
+  // ── Detect currency override in prompt ──
   const promptCurrency: "INR" | "USD" | "EUR" | null = /\$|USD|dollars?/i.test(
     state.prompt
   )
@@ -396,10 +543,10 @@ export async function copierNode(
   const currencyChanged =
     promptCurrency !== null && promptCurrency !== sourceInv.currency;
 
-  //  Detect amount override in prompt ──
+  // ── Detect amount override in prompt ──
   const amountOverride = parseAmountOverride(state.prompt, currency);
 
-  // ── Apply overrides ──
+  // ── Apply tax overrides ──
   let gstPercent =
     currencyChanged && currency !== "INR" ? 0 : sourceInv.gstPercent;
   let gstType = sourceInv.gstType ?? "CGST_SGST";
@@ -419,7 +566,6 @@ export async function copierNode(
     if (/with igst/.test(pl)) gstType = "IGST";
     if (/with cgst|with cgst.sgst/.test(pl)) gstType = "CGST_SGST";
   } else {
-    // USD/EUR: reset GST, apply tax overrides
     gstPercent = 0;
     if (/no tax|no vat|0% tax|0% vat|tax exempt/.test(pl)) taxPercent = 0;
     const taxPctOverride = pl.match(/with\s+(\d+(?:\.\d+)?)\s*%\s*(?:tax|vat)/);
@@ -432,10 +578,9 @@ export async function copierNode(
   if (termOverride) paymentTermsDays = parseInt(termOverride[1]);
   else if (netOverride) paymentTermsDays = parseInt(netOverride[1]);
 
-  // ── Build line items — apply amount override if currency changed or amount specified ──
+  // ── Build line items ──
   let lineItems = sourceInv.lineItems;
   if (amountOverride !== null) {
-    // Override all line items to single item with new amount
     lineItems = [
       {
         description: sourceInv.lineItems[0]?.description || "Services",
@@ -448,7 +593,6 @@ export async function copierNode(
       },
     ];
   } else if (currencyChanged) {
-    // Currency changed but no amount specified — keep descriptions, reset amounts to 0 so user can update
     lineItems = sourceInv.lineItems.map((item) => ({
       ...item,
       rate: 0,
@@ -456,24 +600,81 @@ export async function copierNode(
     }));
   }
 
-  // ── Build copied invoice ──
+  // ── Detect month override — supports full names AND abbreviations ──
+  // "same invoice but for June" / "for jun" / "for sept" / "for jan"
+  const MONTH_NAMES = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+  ];
+  const MONTH_ABBREV_MAP: Record<string, string> = {
+    jan: "January",
+    january: "January",
+    feb: "February",
+    february: "February",
+    mar: "March",
+    march: "March",
+    apr: "April",
+    april: "April",
+    may: "May",
+    jun: "June",
+    june: "June",
+    jul: "July",
+    july: "July",
+    aug: "August",
+    august: "August",
+    sep: "September",
+    sept: "September",
+    september: "September",
+    oct: "October",
+    october: "October",
+    nov: "November",
+    november: "November",
+    dec: "December",
+    december: "December",
+  };
+  const monthOverrideMatch = state.prompt.match(
+    /\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b/i
+  );
   const now = new Date();
+  let invoiceMonth = now.toLocaleDateString("en-IN", {
+    month: "long",
+    year: "numeric",
+  });
+  let invoiceDate = now.toISOString().split("T")[0];
+
+  if (monthOverrideMatch) {
+    const monthName = MONTH_ABBREV_MAP[monthOverrideMatch[1].toLowerCase()];
+    if (monthName) {
+      const monthIdx = MONTH_NAMES.indexOf(monthName);
+      const year = now.getFullYear();
+      invoiceMonth = `${monthName} ${year}`;
+      invoiceDate = `${year}-${String(monthIdx + 1).padStart(2, "0")}-01`;
+    }
+  }
+
+  // ── Build copied invoice ──
   const parsedInvoice = recalculateTotals({
     ...sourceInv,
     clientName: newClientName,
     currency,
-    invoiceDate: now.toISOString().split("T")[0],
-    invoiceMonth: now.toLocaleDateString("en-IN", {
-      month: "long",
-      year: "numeric",
-    }),
+    invoiceDate,
+    invoiceMonth,
     lineItems,
     gstPercent,
     gstType,
     taxPercent,
     taxLabel,
     paymentTermsDays,
-    // Reset GST amounts when switching to USD/EUR
     gstAmount: currency !== "INR" ? 0 : (undefined as unknown as number),
     cgstAmount: currency !== "INR" ? 0 : (undefined as unknown as number),
     sgstAmount: currency !== "INR" ? 0 : (undefined as unknown as number),

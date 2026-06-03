@@ -28,7 +28,6 @@ function detectGstChange(
   prompt: string,
   currency: string
 ): { gstPercent: number; gstType?: "CGST_SGST" | "IGST" } | null {
-  // Never apply GST logic to EUR/USD invoices
   if (currency !== "INR") return null;
 
   const lower = prompt.toLowerCase();
@@ -41,7 +40,7 @@ function detectGstChange(
   if (!addGst) return null;
 
   const pctMatch = lower.match(
-    /(\d+(?:\.\d+)?)\s*%?\s*gst|gst\s*(?:at|of|@)?\s*(\d+(?:\.\d+)?)\s*%?/
+    /(\d+(?:\.\d+)?)\s*%?\s*gst|gst\s*(?:at|of|@|to)?\s*(\d+(?:\.\d+)?)\s*%?/
   );
   const gstPercent = pctMatch ? parseFloat(pctMatch[1] || pctMatch[2]) : 18;
   const gstType = lower.includes("igst")
@@ -60,13 +59,11 @@ function detectTaxChange(
   const lower = prompt.toLowerCase();
   const taxLabel = currency === "EUR" ? "VAT" : "Tax";
 
-  // Remove VAT/Tax
   const removeTax =
     /\b(remove|no|without|zero|0%)\b.*\b(vat|tax)\b/.test(lower) ||
     /\b(vat|tax)\b.*\b(remove|no|without|zero|0%)\b/.test(lower);
   if (removeTax) return { taxPercent: 0, taxLabel };
 
-  // Change VAT/Tax to X%
   const changeTax =
     /\b(add|apply|put|include|set|change|update)\b.*\b(vat|tax)\b/.test(
       lower
@@ -80,6 +77,54 @@ function detectTaxChange(
   );
   const taxPercent = pctMatch ? parseFloat(pctMatch[1] || pctMatch[2]) : 0;
   return { taxPercent, taxLabel };
+}
+
+// ── Extract remove/delete target from prompt ──
+// Returns null when the target is too vague (falls through to LLM instead).
+//
+// Handles:
+//   "remove logo design from last invoice" → "logo design"   ✅
+//   "remove hosting please"                → "hosting"       ✅
+//   "delete hosting wala item"             → "hosting"       ✅ (strips "wala item")
+//   "remove it"                            → null → LLM      ✅
+//   "delete that line item"                → null → LLM      ✅
+//   "remove them all"                      → null → LLM      ✅
+function extractRemoveTarget(prompt: string): string | null {
+  const REMOVE_STOP_WORDS = new Set([
+    "it",
+    "that",
+    "this",
+    "them",
+    "those",
+    "everything",
+    "all",
+    "them all",
+  ]);
+
+  // Trailing noise words that are never part of an item name
+  const TRAILING_NOISE =
+    /\s+(?:please|now|wala\s*item|wala|yeh|woh|line\s+item|item)\s*$/i;
+
+  const removeRegex =
+    /\b(?:remove|delete)\b\s+(.+?)(?:\s+from|\s+in|\s+please|\s+now|\s*$)/i;
+
+  const m = prompt.match(removeRegex);
+  if (!m) return null;
+
+  let captured = m[1]
+    .toLowerCase()
+    .trim()
+    .replace(/^the\s+/, "");
+
+  // Strip trailing noise (order: longer phrases first)
+  captured = captured.replace(TRAILING_NOISE, "").trim();
+
+  // Skip to LLM if target is a vague pronoun or too short
+  if (!captured || captured.length < 2 || REMOVE_STOP_WORDS.has(captured)) {
+    return null;
+  }
+
+  return captured;
 }
 
 function buildEditMessage(
@@ -216,7 +261,6 @@ function parseBlockToInvoice(block: string): ParsedInvoice | null {
     hsnSacType: "SAC" as const,
   }));
 
-  //  detect currency from sessionContext block ──
   const currencyMatch = block.match(/Currency:\s*(INR|USD|EUR)/i);
   const currency: "INR" | "USD" | "EUR" = currencyMatch
     ? (currencyMatch[1].toUpperCase() as "INR" | "USD" | "EUR")
@@ -227,18 +271,36 @@ function parseBlockToInvoice(block: string): ParsedInvoice | null {
     : "INR";
 
   const gstMatch = block.match(/GST:\s*([\d.]+)%\s*(\w+)/i);
-  const taxLineMatch = block.match(/Tax:\s*([\d.]+)%\s*(\w+)/i); // written by buildSessionContext for USD/EUR
+  const taxLineMatch = block.match(/Tax:\s*([\d.]+)%\s*(\w+)/i);
   const totalMatch = block.match(/Total:\s*[₹$€]?([\d,]+)/i);
   const subtotalMatch = block.match(/Subtotal:\s*[₹$€]?([\d,]+)/i);
   const termsMatch = block.match(/Payment Terms:\s*(\d+)/i);
   const clientMatch = block.match(/Client:\s*(.+)/i);
   const monthMatch = block.match(/Invoice Month:\s*(.+)/i);
+  // ── Discount — written by buildSessionContext as "Discount: percent 10%" or "Discount: amount 500" ──
+  const discountLineMatch = block.match(
+    /Discount:\s*(percent|amount)\s+([\d.]+)/i
+  );
+  const discountType = discountLineMatch
+    ? (discountLineMatch[1].toLowerCase() as "percent" | "amount")
+    : ("none" as const);
+  const discountValue = discountLineMatch
+    ? parseFloat(discountLineMatch[2])
+    : 0;
 
   if (!totalMatch) return null;
 
   const subtotal = parseInt((subtotalMatch?.[1] ?? "0").replace(/,/g, ""));
   const total = parseInt((totalMatch[1] ?? "0").replace(/,/g, ""));
-  const gstAmount = total - subtotal;
+  // gstAmount must account for discount: total = (subtotal - discountAmount) + gst
+  const discountAmount =
+    discountType === "percent"
+      ? Math.round((subtotal * discountValue) / 100)
+      : discountType === "amount"
+      ? discountValue
+      : 0;
+  const taxableAmount = subtotal - discountAmount;
+  const gstAmount = total - taxableAmount;
 
   if (currency === "INR") {
     const gstPercent = parseFloat(gstMatch?.[1] ?? "0");
@@ -275,10 +337,10 @@ function parseBlockToInvoice(block: string): ParsedInvoice | null {
       taxLabel: "",
       paymentTermsDays: parseInt(termsMatch?.[1] ?? "15"),
       subtotal,
-      taxableAmount: subtotal,
-      discountType: "none" as const,
-      discountValue: 0,
-      discountAmount: 0,
+      discountType,
+      discountValue,
+      discountAmount,
+      taxableAmount,
       notes: "",
       total,
       invoiceDate: new Date().toISOString().split("T")[0],
@@ -292,8 +354,6 @@ function parseBlockToInvoice(block: string): ParsedInvoice | null {
       warning: "",
     } as unknown as ParsedInvoice;
   } else {
-    // USD or EUR — tax fields, not GST
-    // Read Tax: line first (written by buildSessionContext for USD/EUR), fall back to gstMatch or difference
     const taxPercent = taxLineMatch
       ? parseFloat(taxLineMatch[1])
       : gstMatch
@@ -331,10 +391,10 @@ function parseBlockToInvoice(block: string): ParsedInvoice | null {
       taxLabel,
       paymentTermsDays: parseInt(termsMatch?.[1] ?? "15"),
       subtotal,
-      taxableAmount: subtotal,
-      discountType: "none" as const,
-      discountValue: 0,
-      discountAmount: 0,
+      discountType,
+      discountValue,
+      discountAmount,
+      taxableAmount,
       notes: "",
       total,
       invoiceDate: new Date().toISOString().split("T")[0],
@@ -485,10 +545,19 @@ export async function editorNode(
     };
   }
 
-  // ── Deterministic DISCOUNT — fires before LLM ──
+  // ── Deterministic DISCOUNT ──
+  // Supports: "10% off", "10% discount", "give 10 percent off", "discount of 15%",
+  //           "apply 10 percent discount", "10 percent off"
   const discountPctMatch =
-    state.prompt.match(/([0-9]+(?:[.][0-9]+)?)\s*%?\s*(?:off|discount)/i) ||
-    state.prompt.match(/discount\s+(?:of\s+)?([0-9]+(?:[.][0-9]+)?)\s*%/i);
+    state.prompt.match(/([0-9]+(?:[.][0-9]+)?)\s*%\s*(?:off|discount)/i) ||
+    state.prompt.match(/discount\s+(?:of\s+)?([0-9]+(?:[.][0-9]+)?)\s*%/i) ||
+    state.prompt.match(
+      /([0-9]+(?:[.][0-9]+)?)\s+percent\s+(?:off|discount)/i
+    ) ||
+    state.prompt.match(
+      /(?:apply|give|add|set)\s+([0-9]+(?:[.][0-9]+)?)\s*%?\s*(?:percent\s+)?(?:off|discount)/i
+    );
+
   if (discountPctMatch) {
     const discountValue = parseFloat(discountPctMatch[1]);
     if (!isNaN(discountValue) && discountValue > 0) {
@@ -516,22 +585,17 @@ export async function editorNode(
   }
 
   // ── Deterministic REMOVE ──
-  const removeMatch = state.prompt.match(
-    /\b(?:remove|delete)\b\s+(.+?)(?:\s+from|\s+in|\s*$)/i
-  );
-  if (removeMatch) {
-    const target = removeMatch[1]
-      .toLowerCase()
-      .trim()
-      .replace(/^the\s+/, "");
+  // extractRemoveTarget returns null for vague pronouns ("it", "that") → falls to LLM
+  const removeTarget = extractRemoveTarget(state.prompt);
+  if (removeTarget) {
     const remaining = existing.lineItems.filter(
-      (item) => !item.description.toLowerCase().includes(target)
+      (item) => !item.description.toLowerCase().includes(removeTarget)
     );
 
     if (remaining.length < existing.lineItems.length) {
       const updated = recalculateTotals({ ...existing, lineItems: remaining });
       const removedItems = existing.lineItems
-        .filter((item) => item.description.toLowerCase().includes(target))
+        .filter((item) => item.description.toLowerCase().includes(removeTarget))
         .map((i) => `**${i.description}**`);
 
       return {
@@ -550,9 +614,11 @@ export async function editorNode(
         },
       };
     }
+    // Target extracted but not found in line items → fall through to LLM
+    // (LLM may do fuzzy matching or identify it differently)
   }
 
-  // ── LLM path ──
+  // ── LLM path — handles everything else ──
   const model = new ChatOpenAI({
     modelName: "gpt-4o-mini",
     temperature: 0,
@@ -568,7 +634,6 @@ export async function editorNode(
           existing.taxPercent ?? 0
         }%`;
 
-  // Use plain string replacement — PromptTemplate crashes on {curly} in line item descriptions
   const formatted = EDITOR_PROMPT.replace("{prompt}", state.prompt)
     .replace("{clientName}", existing.clientName)
     .replace("{currency}", currency)
@@ -611,8 +676,6 @@ export async function editorNode(
   if (changedFields.includes("lineItems")) {
     const promptLower = state.prompt.toLowerCase();
 
-    // ── Detect discount before treating as line item add ──
-    // "Add 5% discount" / "Apply 10% discount" should go through applyNonLineItemChanges
     const isDiscountPrompt =
       /\b(add|apply|set|give)\b.*\bdiscount\b/.test(promptLower) ||
       /\bdiscount\b.*\b(add|apply|set)\b/.test(promptLower);
@@ -621,8 +684,6 @@ export async function editorNode(
       changedFields.includes("lineItems") &&
       !changedFields.includes("discountType")
     ) {
-      // The LLM put it in lineItems but it should be a discount — re-check changedFields
-      // If parsedEdit has discountType set, apply it
       if (parsedEdit.discountType && parsedEdit.discountType !== "none") {
         const withDiscount = applyNonLineItemChanges(existing, parsedEdit, [
           "discountType",

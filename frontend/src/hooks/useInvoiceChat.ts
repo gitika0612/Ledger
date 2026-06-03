@@ -396,6 +396,10 @@ export function useInvoiceChat() {
 
     const finalInvoice = recalculateTotals(updatedInvoice);
 
+    // ── Complete ALL async operations first ──
+    // This ensures the DB is fully updated before any React state setters
+    // trigger re-renders that might cause the panel to re-fetch stale data.
+
     if (target.invoiceId) {
       try {
         await updateInvoice(target.invoiceId, finalInvoice);
@@ -403,12 +407,6 @@ export function useInvoiceChat() {
         console.error("Failed to update invoice in DB:", err);
       }
     }
-
-    setSessionInvoices((prev) =>
-      prev.map((s) =>
-        s.messageId === target.messageId ? { ...s, invoice: finalInvoice } : s
-      )
-    );
 
     const sid = currentSessionIdRef.current;
     if (sid) {
@@ -419,7 +417,17 @@ export function useInvoiceChat() {
       }
     }
 
+    // ── Now do all state updates together (after DB is updated) ──
+    setSessionInvoices((prev) =>
+      prev.map((s) =>
+        s.messageId === target.messageId ? { ...s, invoice: finalInvoice } : s
+      )
+    );
+
+    // Setting selectedPanelMessageId here is safe because DB is already updated.
+    // Any re-fetch triggered by this state change will get the correct data.
     setSelectedPanelMessageId(target.messageId);
+
     await addAIMessage(message, sessionId);
   };
 
@@ -521,7 +529,7 @@ export function useInvoiceChat() {
             );
             if (panelMatch) matches = [panelMatch];
           } else if (drafts.length > 0) {
-            matches = [drafts[drafts.length - 1]]; // most recent draft
+            matches = [drafts[drafts.length - 1]];
           }
         }
         if (matches.length === 0) {
@@ -532,7 +540,7 @@ export function useInvoiceChat() {
           await applyEditAndShow(matches[0], invoice, message, sessionId);
           break;
         }
-        // Multiple matches — but filter out confirmed ones first
+        // Multiple matches — filter out confirmed ones first
         const editableMatches = matches.filter((m) => m.status !== "confirmed");
         if (editableMatches.length === 1) {
           await applyEditAndShow(
@@ -543,7 +551,7 @@ export function useInvoiceChat() {
           );
           break;
         }
-        // Still ambiguous
+        // Still ambiguous — ask user
         setPending({
           status: "awaiting_edit_ambiguity",
           sessionId,
@@ -574,12 +582,16 @@ export function useInvoiceChat() {
       }
 
       case "ambiguous": {
+        const destinationClientName =
+          extractDestinationClientFromPrompt(originalPrompt);
+
         setPending({
           status: "awaiting_ambiguity",
           sessionId,
           originalPrompt,
           ambiguityTargetRef: targetRef,
-          ambiguitySourceRef: targetRef, // source client being copied from
+          ambiguitySourceRef: targetRef,
+          clientName: destinationClientName,
           invoice: undefined,
         });
         await addAIMessage(message, sessionId);
@@ -595,8 +607,6 @@ export function useInvoiceChat() {
             matchResult: { type: "none" as const, client: null, score: 0 },
           }));
 
-        // Track the first saved message ID for auto-select.
-        // Warnings are now emitted directly in saveDraftAndShow — no need to collect here.
         let firstBatchMessageId: string | null = null;
 
         for (const { invoice: inv, matchResult } of items) {
@@ -605,8 +615,8 @@ export function useInvoiceChat() {
             matchResult.type === "exact" ? matchResult.client : null,
             sessionId,
             originalPrompt,
-            false, // no auto-select during batch
-            true // suppress individual "draft ready" messages
+            false,
+            true
           );
 
           if (!firstBatchMessageId && savedDraft?._msgId) {
@@ -617,7 +627,6 @@ export function useInvoiceChat() {
         if (firstBatchMessageId && currentSessionIdRef.current === sessionId) {
           setSelectedPanelMessageId(firstBatchMessageId);
         } else if (currentSessionIdRef.current === sessionId) {
-          // Fallback: use ref (may have race condition on first render)
           const allNow = sessionInvoicesRef.current;
           const batchStart = Math.max(0, allNow.length - items.length);
           const firstOfBatch = allNow[batchStart];
@@ -634,6 +643,92 @@ export function useInvoiceChat() {
         break;
     }
   };
+
+  function extractDestinationClientFromPrompt(
+    prompt: string
+  ): string | undefined {
+    const ALL_MONTHS = new Set([
+      "january",
+      "february",
+      "march",
+      "april",
+      "may",
+      "june",
+      "july",
+      "august",
+      "september",
+      "october",
+      "november",
+      "december",
+      "jan",
+      "feb",
+      "mar",
+      "apr",
+      "jun",
+      "jul",
+      "aug",
+      "sep",
+      "oct",
+      "nov",
+      "dec",
+    ]);
+    const STOP_WORDS = new Set([
+      "invoice",
+      "bill",
+      "same",
+      "last",
+      "previous",
+      "month",
+      "this",
+      "that",
+      "the",
+      "a",
+      "an",
+      "with",
+      "and",
+      "or",
+      "but",
+      "for",
+      "to",
+      "from",
+      "in",
+      "on",
+      "at",
+      "of",
+      "copy",
+      "create",
+      "make",
+      "generate",
+      "next",
+      "again",
+      "work",
+      "time",
+      "before",
+      "new",
+      "client",
+      "named",
+      ...Array.from(ALL_MONTHS),
+    ]);
+
+    const specificPatterns: RegExp[] = [
+      /but\s+for\s+(?:(?:a\s+)?new\s+)?(?:client\s+)?(?:named\s+)?([A-Za-z]+)\s*$/i,
+      /but\s+for\s+(?:(?:a\s+)?new\s+)?(?:client\s+)?(?:named\s+)?([A-Za-z]+)/i,
+      /for\s+(?:a\s+)?new\s+client\s+(?:named\s+)?([A-Za-z]+)/i,
+      /client\s+(?:named\s+)?([A-Za-z]+)\s*$/i,
+      /named\s+([A-Za-z]+)\s*$/i,
+      /for\s+([A-Za-z]+)\s*$/i,
+    ];
+
+    for (const pattern of specificPatterns) {
+      const match = prompt.match(pattern);
+      const candidate = match?.[1]?.trim();
+      if (candidate && !STOP_WORDS.has(candidate.toLowerCase())) {
+        return candidate;
+      }
+    }
+
+    return undefined;
+  }
 
   const handlePendingReply = async (reply: string, sessionId: string) => {
     const current = pendingStateRef.current;
@@ -655,7 +750,35 @@ export function useInvoiceChat() {
       }
     );
 
-    // Backend wants to parse contact details (email/phone/address)
+    if (current.status === "awaiting_ambiguity") {
+      if (result.action === "copied" || result.action === "created") {
+        setPending(null);
+        await handleAgentResult(result, sessionId, current.originalPrompt);
+        return;
+      }
+      if (result.action === "needs_client") {
+        // Copier ran successfully but needs client details for the destination
+        setPending({
+          ...current,
+          status: "awaiting_client_details",
+          clientName: result.invoice?.clientName || current.clientName,
+          invoice: result.invoice || current.invoice,
+        });
+        await addAIMessage(result.message, sessionId);
+        return;
+      }
+      if (result.action === "ambiguous") {
+        // Still ambiguous (shouldn't happen after INV ref, but handle gracefully)
+        await addAIMessage(result.message, sessionId);
+        return;
+      }
+      if (result.action === "not_found" || result.action === "unclear") {
+        await addAIMessage(result.message, sessionId);
+        return;
+      }
+    }
+
+    // ── Backend wants to parse contact details (email/phone/address) ──
     if (
       result.action === "needs_client" &&
       result.message === "_parse_client_details_"
@@ -698,7 +821,7 @@ export function useInvoiceChat() {
       }
     }
 
-    // Backend says needs_client with a new/corrected name — update pending
+    // ── Backend says needs_client with a new/corrected name — update pending ──
     if (result.action === "needs_client" && result.pendingClientName) {
       setPending({
         ...current,
@@ -710,7 +833,7 @@ export function useInvoiceChat() {
       return;
     }
 
-    // Backend says needs_client (stay in flow — different client, etc.)
+    // ── Backend says needs_client (stay in flow — different client, etc.) ──
     if (result.action === "needs_client") {
       setPending({
         ...current,
@@ -722,7 +845,7 @@ export function useInvoiceChat() {
       return;
     }
 
-    // Resolved — clear pending and handle normally
+    // ── Resolved — clear pending and handle normally ──
     setPending(null);
     await handleAgentResult(result, sessionId, current.originalPrompt);
   };

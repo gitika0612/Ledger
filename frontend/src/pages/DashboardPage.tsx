@@ -13,9 +13,9 @@ import {
   Settings,
   ChevronRight,
   TrendingUp,
-  Clock,
-  AlertCircle,
-  CheckCircle2,
+  // Clock,
+  // AlertCircle,
+  // CheckCircle2,
   X,
   AlertTriangle,
 } from "lucide-react";
@@ -124,37 +124,37 @@ export function DashboardPage() {
       color: "text-indigo-600",
       bg: "bg-indigo-50",
     },
-    {
-      label: "Pending Payment",
-      value: statsLoading
-        ? "..."
-        : `₹${stats.pendingAmount.toLocaleString("en-IN")}`,
-      sub: "Outstanding",
-      icon: Clock,
-      color: "text-amber-600",
-      bg: "bg-amber-50",
-    },
-    {
-      label: "Paid This Month",
-      value: statsLoading
-        ? "..."
-        : `₹${stats.paidThisMonth.toLocaleString("en-IN")}`,
-      sub: new Date().toLocaleString("en-IN", {
-        month: "long",
-        year: "numeric",
-      }),
-      icon: CheckCircle2,
-      color: "text-emerald-600",
-      bg: "bg-emerald-50",
-    },
-    {
-      label: "Overdue",
-      value: statsLoading ? "..." : stats.overdueCount.toString(),
-      sub: "Needs attention",
-      icon: AlertCircle,
-      color: "text-red-500",
-      bg: "bg-red-50",
-    },
+    // {
+    //   label: "Pending Payment",
+    //   value: statsLoading
+    //     ? "..."
+    //     : `₹${stats.pendingAmount.toLocaleString("en-IN")}`,
+    //   sub: "Outstanding",
+    //   icon: Clock,
+    //   color: "text-amber-600",
+    //   bg: "bg-amber-50",
+    // },
+    // {
+    //   label: "Paid This Month",
+    //   value: statsLoading
+    //     ? "..."
+    //     : `₹${stats.paidThisMonth.toLocaleString("en-IN")}`,
+    //   sub: new Date().toLocaleString("en-IN", {
+    //     month: "long",
+    //     year: "numeric",
+    //   }),
+    //   icon: CheckCircle2,
+    //   color: "text-emerald-600",
+    //   bg: "bg-emerald-50",
+    // },
+    // {
+    //   label: "Overdue",
+    //   value: statsLoading ? "..." : stats.overdueCount.toString(),
+    //   sub: "Needs attention",
+    //   icon: AlertCircle,
+    //   color: "text-red-500",
+    //   bg: "bg-red-50",
+    // },
   ];
 
   useEffect(() => {

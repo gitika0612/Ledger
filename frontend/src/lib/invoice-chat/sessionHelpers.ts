@@ -8,7 +8,7 @@ export function buildSessionContext(invoices: SessionInvoice[]): string {
       const inv = si.invoice;
       const isMostRecent = index === invoices.length - 1;
       const symbol =
-        inv.currency === "USD" ? "$" : inv.currency === "EUR" ? "€" : "₹"; // ← add
+        inv.currency === "USD" ? "$" : inv.currency === "EUR" ? "€" : "₹";
 
       const lineItemsStr =
         inv.lineItems
@@ -22,11 +22,23 @@ export function buildSessionContext(invoices: SessionInvoice[]): string {
           )
           .join("\n") ?? "  - (no line items)";
 
+      // ── Discount line — only emit when a discount is actually applied ──
+      const hasDiscount =
+        inv.discountType &&
+        inv.discountType !== "none" &&
+        (inv.discountValue ?? 0) > 0;
+      const discountLine = hasDiscount
+        ? `Discount: ${inv.discountType} ${inv.discountValue}${
+            inv.discountType === "percent" ? "%" : ""
+          }`
+        : "";
+
       return [
         `Invoice Ref: ${si.invoiceNumber ?? "Draft"}${
           isMostRecent ? " [MOST RECENT]" : ""
         }`,
         `Client: ${inv.clientName}`,
+        `Currency: ${inv.currency ?? "INR"}`,
         `Invoice Month: ${inv.invoiceMonth ?? ""}`,
         inv.currency === "INR"
           ? `GST: ${inv.gstPercent}% ${inv.gstType ?? "CGST_SGST"}`
@@ -34,6 +46,7 @@ export function buildSessionContext(invoices: SessionInvoice[]): string {
               inv.taxLabel || (inv.currency === "EUR" ? "VAT" : "Tax")
             }`,
         `Payment Terms: ${inv.paymentTermsDays} days`,
+        discountLine, // ← empty string filtered out below
         `Subtotal: ${symbol}${inv.subtotal?.toLocaleString("en-IN")}`,
         `Total: ${symbol}${inv.total.toLocaleString("en-IN")}`,
         `Line Items:\n${lineItemsStr}`,
@@ -59,20 +72,20 @@ export function findMatchingInvoices(
   );
   if (byNumber.length > 0) return byNumber;
 
-  // 2. Invoice number contained in ref (e.g. ref = "inv-2026-047" extracted from prompt)
+  // 2. Invoice number contained in ref
   const byNumberInRef = sessionInvoices.filter(
     (si) =>
       si.invoiceNumber && refLower.includes(si.invoiceNumber.toLowerCase())
   );
   if (byNumberInRef.length > 0) return byNumberInRef;
 
-  // 3. Exact client name match only — no substring to avoid false positives
+  // 3. Exact client name match
   const byExactName = sessionInvoices.filter(
     (si) => si.invoice.clientName.toLowerCase() === refLower
   );
   if (byExactName.length > 0) return byExactName;
 
-  // 4. Client name starts with ref (handles "Pri" → "Priya") — kept narrow
+  // 4. Client name starts with ref (min 3 chars)
   const byNamePrefix = sessionInvoices.filter(
     (si) =>
       si.invoice.clientName.toLowerCase().startsWith(refLower) &&
