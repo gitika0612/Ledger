@@ -66,7 +66,6 @@ export async function parseInvoiceWithAI(
   prompt: string,
   userId?: string,
   sessionContext?: string,
-  memoryContext?: string,
   currentInvoice?: ParsedInvoice | null,
   pendingState?: PendingStateContext | null
 ): Promise<AgentResult> {
@@ -74,7 +73,6 @@ export async function parseInvoiceWithAI(
     prompt,
     userId,
     sessionContext,
-    memoryContext,
     currentInvoice,
     pendingState: pendingState || null,
   });
@@ -172,27 +170,4 @@ export async function fetchInvoiceById(id: string) {
   const response = await api.get(`/invoices/${id}`);
   if (!response.data.invoice) throw new Error("Invoice not found");
   return response.data.invoice;
-}
-
-export async function fetchClientHistory(clientName: string, userId: string) {
-  const response = await api.get(
-    `/invoices/client-history/${encodeURIComponent(clientName)}`,
-    { headers: { "x-clerk-id": userId } }
-  );
-  return response.data.invoices;
-}
-
-export async function fetchLatestClientInvoice(
-  clientName: string,
-  userId: string
-): Promise<ParsedInvoice | null> {
-  try {
-    const response = await api.get(
-      `/invoices/client/${encodeURIComponent(clientName)}/latest`,
-      { params: { userId } }
-    );
-    return response.data ?? null;
-  } catch {
-    return null;
-  }
 }

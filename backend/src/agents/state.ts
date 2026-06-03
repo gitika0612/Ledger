@@ -9,19 +9,20 @@ export type AgentIntent =
   | "multi"
   | "memory"
   | "split"
+  | "query"
   | "unclear"
   | null;
 
 export type AgentAction =
-  | "created" // New invoice(s) ready — frontend saves draft
-  | "edited" // Invoice edited — frontend updates in-session invoice
-  | "copied" // Invoice copied — frontend saves new draft
-  | "multi_created" // Multiple invoices ready
-  | "needs_client" // New client, need email/details from user
-  | "ambiguous" // Multiple matching invoices — ask user which one
-  | "not_found" // Referenced invoice not found in session
-  | "unclear" // Could not understand the prompt
-  | "info"; // Just informational (no invoice action)
+  | "created"
+  | "edited"
+  | "copied"
+  | "multi_created"
+  | "needs_client"
+  | "ambiguous"
+  | "not_found"
+  | "unclear"
+  | "info";
 
 export interface MatchResult {
   type: "exact" | "partial" | "none";

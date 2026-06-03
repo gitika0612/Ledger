@@ -4,12 +4,39 @@ import { ParsedInvoice } from "../schemas/invoiceSchema";
  * Recalculates all totals from line items.
  * INR → uses gstPercent/gstAmount/cgst/sgst/igst fields
  * USD/EUR → uses taxPercent/taxAmount/taxLabel fields
+ *
+ * DEFENSIVE: If LLM returns empty lineItems but set a total/subtotal,
+ * creates a fallback "Services" line item so the invoice renders correctly.
  */
 export function recalculateTotals(invoice: ParsedInvoice): ParsedInvoice {
-  const subtotal = invoice.lineItems.reduce(
-    (sum, item) => sum + item.amount,
-    0
-  );
+  // ── Defensive: if LLM returned empty lineItems, create fallback from total ──
+  let lineItems = invoice.lineItems;
+  if (!lineItems || lineItems.length === 0) {
+    // Use subtotal if available, otherwise use total (for tax-inclusive invoices)
+    const baseAmount =
+      invoice.subtotal > 0
+        ? invoice.subtotal
+        : invoice.total > 0
+        ? invoice.total
+        : 0;
+    lineItems = [
+      {
+        description: "Services",
+        quantity: 1,
+        unit: "item",
+        rate: baseAmount,
+        amount: baseAmount,
+        hsnSacCode: "",
+        hsnSacType: "SAC" as const,
+      },
+    ];
+    console.log(
+      "⚠️ recalculateTotals: LLM returned empty lineItems — created fallback with amount:",
+      baseAmount
+    );
+  }
+
+  const subtotal = lineItems.reduce((sum, item) => sum + item.amount, 0);
 
   const discountType = invoice.discountType || "none";
   const discountValue = invoice.discountValue || 0;
@@ -25,7 +52,6 @@ export function recalculateTotals(invoice: ParsedInvoice): ParsedInvoice {
   const currency = invoice.currency ?? "INR";
 
   if (currency === "INR") {
-    // ── INR path: GST calculation ──
     const gstPercent = invoice.gstPercent ?? 0;
     const gstAmount = Math.round((taxableAmount * gstPercent) / 100);
     const gstType = invoice.gstType || "CGST_SGST";
@@ -35,6 +61,7 @@ export function recalculateTotals(invoice: ParsedInvoice): ParsedInvoice {
 
     return {
       ...invoice,
+      lineItems,
       currency,
       subtotal,
       discountAmount,
@@ -49,13 +76,13 @@ export function recalculateTotals(invoice: ParsedInvoice): ParsedInvoice {
       total: taxableAmount + gstAmount,
     };
   } else {
-    // ── USD/EUR path: generic Tax/VAT calculation ──
     const taxPercent = invoice.taxPercent ?? 0;
     const taxAmount = Math.round((taxableAmount * taxPercent) / 100);
     const taxLabel = invoice.taxLabel || (currency === "EUR" ? "VAT" : "Tax");
 
     return {
       ...invoice,
+      lineItems,
       currency,
       subtotal,
       discountAmount,

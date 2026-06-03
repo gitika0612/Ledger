@@ -1406,7 +1406,8 @@ export function InvoicePreviewCard({
                   } text-right`}
                 >
                   <p className="text-sm text-gray-600">
-                    {formatCurrency(item.rate, currency)}
+                    {/* {formatCurrency(item.rate, currency)} */}
+                    {item.rate}
                   </p>
                 </div>
                 <div
@@ -1415,7 +1416,8 @@ export function InvoicePreviewCard({
                   } text-right`}
                 >
                   <p className="text-sm font-semibold text-gray-900">
-                    {formatCurrency(item.amount, currency)}
+                    {/* {formatCurrency(item.amount, currency)} */}
+                    {item.amount}
                   </p>
                 </div>
               </div>

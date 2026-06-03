@@ -3,10 +3,10 @@ import { z } from "zod";
 import { InvoiceAgentState, AgentIntent } from "../state";
 
 const routerSchema = z.object({
-  intent: z.enum(["new", "edit", "copy", "multi", "split", "unclear"]),
+  intent: z.enum(["new", "edit", "copy", "multi", "split", "query", "unclear"]),
   isMultiple: z.boolean(),
-  targetRef: z.string(), // For edit/copy: source invoice ref or client name
-  clientName: z.string(), // Primary client name from the prompt
+  targetRef: z.string(),
+  clientName: z.string(),
   estimatedCount: z.number(),
   notes: z.string(),
 });
@@ -31,6 +31,23 @@ ${state.sessionContext}
 User prompt: "${state.prompt}"
 
 ROUTING RULES — read carefully:
+
+"query" = user is ASKING about existing invoices (not creating/editing). Use when:
+  - "show me all overdue invoices" → query
+  - "which invoices are due this week?" → query
+  - "which invoices are due this month?" → query
+  - "which invoices are due for May?" → query
+  - "show me all draft/confirmed/sent invoices" → query
+  - "show me all invoices for Priya" → query
+  - "what's the total I've billed Rahul?" → query
+  - "what's the total I've billed in 2026?" → query
+  - "find all invoices above ₹1,00,000" → query
+  - "show unpaid invoices" / "show outstanding invoices" → query
+  - "show me all clients with outstanding payments" → query
+  - "mark Priya's invoice as paid" / "mark INV-2026-001 as paid" → query
+  - "Ankit paid ₹50,000 today" → query
+  - Any question about existing invoice data → query
+  CRITICAL: "show", "find", "list", "which", "what's my total", "how much", "mark as paid" → ALWAYS query
 
 "new" = create a FRESH invoice. Use when:
   - "Invoice X for ₹Y" — any prompt that states an amount and a client name
@@ -94,7 +111,6 @@ ROUTING RULES — read carefully:
   CRITICAL: "[name] ₹X and [name] ₹Y" pattern → multi, never new
   NEVER use "multi" for: percentage splits, multiple line items in one invoice
 
-
 "split" = divide ONE invoice total into N equal parts. Use when:
   - "split [client]'s invoice into N parts"
   - "divide into N equal invoices"
@@ -121,6 +137,15 @@ DISAMBIGUATION EXAMPLES:
 "Invoice Kartik ₹30,000 for Q1 2026" → multi, estimatedCount=3
 "Invoice Rahul ₹50,000 and Priya ₹30,000 for development" → multi, estimatedCount=2
 "Bill Rahul ₹20,000 and Ankit ₹15,000" → multi, estimatedCount=2
+"Show me all overdue invoices" → query
+"Which invoices are due this week?" → query
+"What's the total I've billed Rahul in 2026?" → query
+"Show all draft invoices" → query
+"Mark INV-2026-001 as paid" → query
+"Ankit paid today" → query
+"Show me all invoices for Priya this year" → query
+"Find all invoices above ₹1,00,000" → query
+"Show clients with outstanding payments" → query
 
 Also output:
 - clientName: the DESTINATION client name (e.g. for "copy Rahul's for Priya" → clientName="Priya")

@@ -52,6 +52,16 @@ function formatINR(amount: number, currency?: "INR" | "USD" | "EUR") {
   return formatCurrency(amount, currency ?? "INR");
 }
 
+// ── Currency-aware tax label for mini card ──
+function getTaxLabel(invoice: ParsedInvoice): string {
+  const currency = invoice.currency ?? "INR";
+  if (currency === "INR") {
+    return `GST ${invoice.gstPercent ?? 0}%`;
+  }
+  const label = invoice.taxLabel || (currency === "EUR" ? "VAT" : "Tax");
+  return `${label} ${invoice.taxPercent ?? 0}%`;
+}
+
 function parseMonthKey(key: string): Date {
   const months: Record<string, number> = {
     january: 0,
@@ -549,8 +559,9 @@ export function InvoicePanel({
                                               <span className="text-gray-200">
                                                 ·
                                               </span>
+                                              {/* ── Currency-aware tax label ── */}
                                               <span className="text-xs text-gray-400">
-                                                GST {si.invoice.gstPercent}%
+                                                {getTaxLabel(si.invoice)}
                                               </span>
                                               {si.invoice.invoiceMonth && (
                                                 <>

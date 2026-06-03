@@ -32,8 +32,6 @@ export async function parseInvoice(req: Request, res: Response): Promise<void> {
       userId: userId || "",
       sessionId: "",
       sessionContext: sessionContext || "No existing invoices in this session.",
-      memoryContext:
-        memoryContext || "No past invoice history for this client.",
       parsedInvoice: currentInvoice || null,
       pendingState: pendingState || null,
     });

@@ -1,7 +1,9 @@
 import { ChatOpenAI } from "@langchain/openai";
 import { InvoiceAgentState, AgentResult } from "../state";
 import { findClientMatch } from "../../lib/clientMatcher";
-import { Client } from "../../models/Client";
+import { Invoice } from "../../models/Invoice";
+import { ParsedInvoice } from "../schemas/invoiceSchema";
+import { recalculateTotals, formatCurrency } from "../utils/invoiceUtils";
 
 const PENDING_REPLY_PROMPT = `You are handling a conversational reply in an invoice chat assistant.
 
@@ -49,6 +51,50 @@ Classify the reply into one of these actions:
 
 RESPOND WITH ONLY VALID JSON. No explanation.`;
 
+async function fetchInvoiceFromDB(
+  userId: string,
+  invoiceNumber: string
+): Promise<ParsedInvoice | null> {
+  try {
+    const inv = await Invoice.findOne({
+      userId,
+      invoiceNumber: { $regex: new RegExp(`^${invoiceNumber}$`, "i") },
+    }).lean();
+    if (!inv) return null;
+    return {
+      clientName: inv.clientName,
+      lineItems: inv.lineItems,
+      currency: inv.currency ?? "INR",
+      gstPercent: inv.gstPercent,
+      gstType: inv.gstType as "IGST" | "CGST_SGST",
+      paymentTermsDays: inv.paymentTermsDays,
+      subtotal: inv.subtotal,
+      taxableAmount: inv.taxableAmount ?? inv.subtotal,
+      gstAmount: inv.gstAmount,
+      cgstAmount: inv.cgstAmount ?? 0,
+      sgstAmount: inv.sgstAmount ?? 0,
+      igstAmount: inv.igstAmount ?? 0,
+      taxPercent: inv.taxPercent ?? 0,
+      taxAmount: inv.taxAmount ?? 0,
+      taxLabel: inv.taxLabel ?? "",
+      discountType:
+        (inv.discountType as "percent" | "amount" | "none") ?? "none",
+      discountValue: inv.discountValue ?? 0,
+      discountAmount: inv.discountAmount ?? 0,
+      notes: inv.notes ?? "",
+      total: inv.total,
+      invoiceDate: inv.invoiceDate
+        ? new Date(inv.invoiceDate).toISOString().split("T")[0]
+        : new Date().toISOString().split("T")[0],
+      invoiceMonth: inv.invoiceMonth ?? "",
+      changedFields: [],
+      warning: "",
+    } as unknown as ParsedInvoice;
+  } catch {
+    return null;
+  }
+}
+
 export async function pendingReplyNode(
   state: InvoiceAgentState
 ): Promise<Partial<InvoiceAgentState>> {
@@ -59,6 +105,89 @@ export async function pendingReplyNode(
       agentResult: {
         action: "unclear",
         message: "Something went wrong. Please try again.",
+      },
+    };
+  }
+
+  // ── Issue 4 fix: awaiting_edit_ambiguity — user replies with invoice number or "latest" ──
+  if (pendingState.status === "awaiting_edit_ambiguity") {
+    const replyLower = prompt.toLowerCase().trim();
+    const invoiceNumberMatch = prompt.match(/INV-\d{4}-\d+/i);
+
+    let targetInvoice: ParsedInvoice | null = null;
+    let targetRef = "";
+
+    if (invoiceNumberMatch) {
+      targetRef = invoiceNumberMatch[0];
+      if (userId) {
+        targetInvoice = await fetchInvoiceFromDB(userId, targetRef);
+      }
+    } else if (replyLower === "latest" || replyLower === "most recent") {
+      targetRef = "last";
+      // Fetch the most recent invoice for this user from DB
+      if (userId) {
+        try {
+          const last = await Invoice.findOne({ userId })
+            .sort({ createdAt: -1 })
+            .lean();
+          if (last) {
+            targetInvoice = {
+              clientName: last.clientName,
+              lineItems: last.lineItems,
+              currency: (last.currency ?? "INR") as "INR" | "USD" | "EUR",
+              gstPercent: last.gstPercent,
+              gstType: last.gstType as "IGST" | "CGST_SGST",
+              paymentTermsDays: last.paymentTermsDays,
+              subtotal: last.subtotal,
+              taxableAmount: last.taxableAmount ?? last.subtotal,
+              gstAmount: last.gstAmount,
+              cgstAmount: last.cgstAmount ?? 0,
+              sgstAmount: last.sgstAmount ?? 0,
+              igstAmount: last.igstAmount ?? 0,
+              taxPercent: last.taxPercent ?? 0,
+              taxAmount: last.taxAmount ?? 0,
+              taxLabel: last.taxLabel ?? "",
+              discountType:
+                (last.discountType as "percent" | "amount" | "none") ?? "none",
+              discountValue: last.discountValue ?? 0,
+              discountAmount: last.discountAmount ?? 0,
+              notes: last.notes ?? "",
+              total: last.total,
+              invoiceDate: last.invoiceDate
+                ? new Date(last.invoiceDate).toISOString().split("T")[0]
+                : new Date().toISOString().split("T")[0],
+              invoiceMonth: last.invoiceMonth ?? "",
+              changedFields: [],
+              warning: "",
+            } as unknown as ParsedInvoice;
+            targetRef = last.invoiceNumber ?? "last";
+          }
+        } catch {
+          targetInvoice = null;
+        }
+      }
+    }
+
+    if (!targetInvoice) {
+      return {
+        agentResult: {
+          action: "unclear",
+          message: `I couldn't find that invoice. Please reply with a valid invoice number (e.g. **INV-2026-160**) or say **latest**.`,
+        },
+      };
+    }
+
+    return {
+      parsedInvoice: targetInvoice,
+      targetRef,
+      intent: "edit" as any,
+      agentResult: {
+        action: "edited",
+        message: `Got it! Invoice for **${
+          targetRef || targetInvoice.clientName
+        }**.`,
+        invoice: targetInvoice,
+        targetRef,
       },
     };
   }
@@ -92,14 +221,11 @@ export async function pendingReplyNode(
         : JSON.stringify(response.content);
     classification = JSON.parse(text.replace(/```json|```/g, "").trim());
   } catch {
-    // Fallback: treat as client details
     classification = { action: "client_details", rawText: prompt };
   }
 
   const invoice = pendingState.invoice || null;
   const clientName = pendingState.clientName || "";
-
-  // ── Handle each action ──
 
   if (
     classification.action === "name_correction" &&
@@ -127,7 +253,6 @@ export async function pendingReplyNode(
       };
     }
 
-    // Client not found — ask for details with corrected name
     return {
       parsedInvoice: correctedInvoice,
       agentResult: {
@@ -191,7 +316,9 @@ export async function pendingReplyNode(
       parsedInvoice: invoice,
       agentResult: {
         action: "created",
-        message: `Got it! Using **${pendingState.matchedClient.name}**'s saved details ✓`,
+        message: `Got it! Using **${
+          (pendingState.matchedClient as any).name
+        }**'s saved details ✓`,
         invoice,
         matchResult: {
           type: "exact",
@@ -248,12 +375,12 @@ export async function pendingReplyNode(
     };
   }
 
-  // Default: client_details — parse contact info
+  // Default: client_details
   return {
     parsedInvoice: invoice,
     agentResult: {
       action: "needs_client",
-      message: "_parse_client_details_", // Frontend handles this specially
+      message: "_parse_client_details_",
       invoice,
       matchResult: { type: "none", client: null, score: 0 },
       rawClientDetails: classification.rawText || prompt,

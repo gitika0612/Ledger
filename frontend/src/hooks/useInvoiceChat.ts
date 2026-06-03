@@ -7,9 +7,7 @@ import {
   deleteInvoice,
   updateInvoice,
   fetchInvoiceById,
-  fetchClientHistory,
   AgentResult,
-  fetchLatestClientInvoice,
 } from "@/lib/api/invoiceApi";
 import { parseClientDetailsFromText, ClientAPI } from "@/lib/api/clientApi";
 import { ParsedInvoice } from "@/components/invoice/InvoicePreviewCard";
@@ -30,10 +28,8 @@ import { getTime, toUIMessage } from "@/lib/invoice-chat/messageHelpers";
 import { recalculateTotals } from "@/lib/invoice-chat/invoiceHelpers";
 import {
   buildSessionContext,
-  extractClientNameFromPrompt,
   findMatchingInvoices,
 } from "@/lib/invoice-chat/sessionHelpers";
-import { isEditIntent } from "@/lib/invoice-chat/Editintenthelper";
 import { formatCurrency } from "@/lib/currency";
 
 export interface UIMessage {
@@ -45,16 +41,6 @@ export interface UIMessage {
   status?: "draft" | "confirmed" | "sent" | "paid" | "overdue";
   invoiceNumber?: string;
   dbMessageId?: string;
-}
-
-interface InvoiceHistoryEntry {
-  invoiceMonth?: string;
-  lineItems?: Array<{ description: string; rate: number }>;
-  gstPercent?: number;
-  gstType?: string;
-  paymentTermsDays?: number;
-  total?: number;
-  currency?: "INR" | "USD" | "EUR";
 }
 
 const GENERIC_CLIENT_NAMES = new Set([
@@ -458,6 +444,9 @@ export function useInvoiceChat() {
           true,
           true
         );
+        if (result.warning && currentSessionIdRef.current === sessionId) {
+          await addAIMessage(`⚠️ ${result.warning}`, sessionId);
+        }
         break;
       }
 
@@ -480,6 +469,9 @@ export function useInvoiceChat() {
             )}** is ready!\n\nWhat's the client's name?`,
             sessionId
           );
+          if (result.warning && currentSessionIdRef.current === sessionId) {
+            await addAIMessage(`⚠️ ${result.warning}`, sessionId);
+          }
           break;
         }
 
@@ -653,7 +645,6 @@ export function useInvoiceChat() {
       reply,
       user.id,
       sessionContext,
-      undefined,
       current.invoice || null,
       {
         status: current.status,
@@ -765,220 +756,27 @@ export function useInvoiceChat() {
       }
 
       if (pendingStateRef.current) {
-        await handlePendingReply(prompt, sessionId);
-        loadSessions();
-        return;
+        // ── If new prompt looks like a fresh invoice while awaiting client details,
+        //    auto-dismiss the pending state and treat as a new invoice ──
+        const looksLikeNewInvoice =
+          /\b(invoice|bill|create)\b/i.test(prompt) &&
+          /[$€₹]|\d/.test(prompt) &&
+          pendingStateRef.current.status === "awaiting_client_details";
+
+        if (looksLikeNewInvoice) {
+          setPending(null); // dismiss current pending state silently
+          // fall through to normal invoice creation below
+        } else {
+          await handlePendingReply(prompt, sessionId);
+          loadSessions();
+          return;
+        }
       }
 
+      //  pass sessionContext and let backend figure out everything ──
       const sessionContext = buildSessionContext(sessionInvoicesRef.current);
 
-      // ── Detect intent types early ──
-      const isCopyPrompt =
-        prompt.toLowerCase().includes("same invoice") ||
-        prompt.toLowerCase().includes("copy") ||
-        prompt.toLowerCase().includes("same as");
-
-      const looksLikeEdit = isEditIntent(prompt);
-
-      // ── Declare currentInvoice here so all blocks can use it ──
-      let currentInvoice: ParsedInvoice | null = null;
-
-      // ── Copy source detection ──
-      if (isCopyPrompt) {
-        const sourceClientMatch =
-          prompt.match(/same\s+(?:invoice\s+)?as\s+([A-Z][a-z]+)/i)?.[1] ||
-          prompt.match(/copy\s+([A-Z][a-z]+)(?:'s)?\s+invoice/i)?.[1] ||
-          prompt.match(/([A-Z][a-z]+)(?:'s)?\s+invoice\s+for/i)?.[1];
-
-        if (sourceClientMatch) {
-          // Named client source — find in session
-          const m = findMatchingInvoices(
-            sessionInvoicesRef.current,
-            sourceClientMatch
-          );
-          if (m.length === 1) {
-            currentInvoice = m[0].invoice;
-          }
-          // m.length > 1 → don't set → copierNode ambiguity check fires
-        } else {
-          // ── "last one" / "last invoice" / "same as last" fallback ──
-          const pl = prompt.toLowerCase();
-          const isLastRef =
-            pl.includes("last one") ||
-            pl.includes("last invoice") ||
-            pl.includes("previous invoice") ||
-            pl.includes("same as last");
-
-          if (isLastRef && sessionInvoicesRef.current.length > 0) {
-            // Use most recent session invoice as source
-            currentInvoice =
-              sessionInvoicesRef.current[sessionInvoicesRef.current.length - 1]
-                .invoice;
-          }
-          // If isLastRef but sessionInvoicesRef is empty (race condition or new chat),
-          // copierNode Priority 2 will parse from sessionContext string
-        }
-      }
-
-      // ── Memory context — skipped for copy prompts ──
-      let memoryContext = "No past invoice history for this client.";
-
-      if (!isCopyPrompt) {
-        const possibleClient = extractClientNameFromPrompt(prompt);
-        if (possibleClient) {
-          try {
-            const history = (await fetchClientHistory(
-              possibleClient,
-              user.id
-            )) as InvoiceHistoryEntry[];
-            if (history?.length > 0) {
-              const lines = history.map((inv, i) => {
-                const symbol =
-                  inv.currency === "USD"
-                    ? "$"
-                    : inv.currency === "EUR"
-                    ? "€"
-                    : "₹";
-                const items =
-                  inv.lineItems
-                    ?.map((li) => `${li.description} ${symbol}${li.rate}`)
-                    .join(", ") ?? "";
-                return `Invoice ${i + 1} [${
-                  inv.invoiceMonth ?? "unknown"
-                }]: ${items} | GST ${inv.gstPercent ?? 0}% ${
-                  inv.gstType ?? ""
-                } | Terms ${inv.paymentTermsDays ?? 15}d | Total ${symbol}${
-                  inv.total ?? 0
-                }`;
-              });
-              memoryContext = `Past invoices for ${possibleClient}:\n${lines.join(
-                "\n"
-              )}\nUse these rates and terms as defaults.`;
-            }
-          } catch {
-            // Memory is optional
-          }
-        }
-      }
-
-      // ── Edit intent: find which invoice to edit ──
-      if (looksLikeEdit && !currentInvoice) {
-        const promptLower = prompt.toLowerCase();
-        const sessions = sessionInvoicesRef.current;
-
-        // 1. Explicit invoice number
-        const invNumMatch = prompt.match(/INV-[0-9]{4}-[0-9]{3,}/i);
-        const invNumInPrompt = invNumMatch ? invNumMatch[0] : "";
-        if (invNumInPrompt) {
-          const m = findMatchingInvoices(sessions, invNumInPrompt);
-          if (m.length >= 1) currentInvoice = m[m.length - 1].invoice;
-        }
-
-        // 2. "last invoice" → most recent session invoice
-        if (
-          !currentInvoice &&
-          (promptLower.includes("last invoice") ||
-            promptLower.includes("in last invoice") ||
-            promptLower.includes("previous invoice") ||
-            promptLower.includes("latest invoice"))
-        ) {
-          if (sessions.length > 0)
-            currentInvoice = sessions[sessions.length - 1].invoice;
-        }
-
-        // 3. Named client
-        if (!currentInvoice) {
-          const clientRefArr = prompt.match(
-            /(?:to|in|for|on)\s+([A-Z][a-z]+)(?:'s)?\s+invoice/i
-          );
-          const clientRef = clientRefArr ? clientRefArr[1] : "";
-          if (clientRef) {
-            const m = findMatchingInvoices(sessions, clientRef);
-            if (m.length > 0) currentInvoice = m[m.length - 1].invoice;
-          }
-        }
-
-        // 4. Selected panel invoice
-        if (!currentInvoice && selectedPanelMessageId) {
-          currentInvoice =
-            sessions.find((s) => s.messageId === selectedPanelMessageId)
-              ?.invoice ?? null;
-        }
-
-        // 5. Most recent session invoice as last resort
-        if (!currentInvoice && sessions.length > 0) {
-          currentInvoice = sessions[sessions.length - 1].invoice;
-        }
-      }
-
-      // ── Split intent: find which invoice to split ──
-      let splitInvoice: ParsedInvoice | null = null;
-      const promptLower2 = prompt.toLowerCase();
-      if (
-        promptLower2.includes("split") ||
-        promptLower2.includes("divide") ||
-        promptLower2.includes("equal part")
-      ) {
-        const sessions2 = sessionInvoicesRef.current;
-
-        // 1. Explicit invoice number
-        const invNumArr = prompt.match(/INV-[0-9]{4}-[0-9]{3,}/i);
-        if (invNumArr) {
-          const m = findMatchingInvoices(sessions2, invNumArr[0]);
-          if (m.length > 0) splitInvoice = m[0].invoice;
-        }
-
-        // 2. Named client in session
-        if (!splitInvoice) {
-          const cArr = prompt.match(
-            /([A-Z][a-z]+)(?:'s)? (?:[^\s]+ )?invoice/i
-          );
-          if (cArr) {
-            const m = findMatchingInvoices(sessions2, cArr[1]);
-            if (m.length > 0) splitInvoice = m[m.length - 1].invoice;
-          }
-        }
-
-        // 3. Selected panel invoice
-        if (!splitInvoice && selectedPanelMessageId) {
-          splitInvoice =
-            sessions2.find((s) => s.messageId === selectedPanelMessageId)
-              ?.invoice ?? null;
-        }
-
-        // 4. Most recent session invoice
-        if (!splitInvoice && sessions2.length > 0) {
-          splitInvoice = sessions2[sessions2.length - 1].invoice;
-        }
-
-        // 5. Cross-session fallback — fetch most recent from DB (any status)
-        if (!splitInvoice || sessions2.length === 0) {
-          const clientMatch =
-            prompt.match(/([A-Z][a-z]+)(?:'s)/i)?.[1] ||
-            prompt.match(/\bfor\s+([A-Z][a-z]+)/i)?.[1];
-          if (clientMatch) {
-            try {
-              const latest = await fetchLatestClientInvoice(
-                clientMatch,
-                user.id
-              );
-              if (latest) {
-                splitInvoice = latest as ParsedInvoice;
-              }
-            } catch {
-              // Fall through to generatorNode which will parse from prompt
-            }
-          }
-        }
-      }
-
-      const result = await parseInvoiceWithAI(
-        prompt,
-        user.id,
-        sessionContext,
-        memoryContext,
-        splitInvoice ?? currentInvoice
-      );
+      const result = await parseInvoiceWithAI(prompt, user.id, sessionContext);
       await handleAgentResult(result, sessionId, prompt);
       loadSessions();
     } catch (err) {

@@ -7,17 +7,18 @@ export function buildSessionContext(invoices: SessionInvoice[]): string {
     .map((si, index) => {
       const inv = si.invoice;
       const isMostRecent = index === invoices.length - 1;
+      const symbol =
+        inv.currency === "USD" ? "$" : inv.currency === "EUR" ? "€" : "₹"; // ← add
 
-      // Build line items string
       const lineItemsStr =
         inv.lineItems
           ?.map(
             (item) =>
               `  - ${item.description} | Qty: ${item.quantity} ${
                 item.unit
-              } | Rate: ₹${item.rate.toLocaleString(
+              } | Rate: ${symbol}${item.rate.toLocaleString(
                 "en-IN"
-              )} | Amount: ₹${item.amount.toLocaleString("en-IN")}`
+              )} | Amount: ${symbol}${item.amount.toLocaleString("en-IN")}`
           )
           .join("\n") ?? "  - (no line items)";
 
@@ -27,10 +28,14 @@ export function buildSessionContext(invoices: SessionInvoice[]): string {
         }`,
         `Client: ${inv.clientName}`,
         `Invoice Month: ${inv.invoiceMonth ?? ""}`,
-        `GST: ${inv.gstPercent}% ${inv.gstType ?? "CGST_SGST"}`,
+        inv.currency === "INR"
+          ? `GST: ${inv.gstPercent}% ${inv.gstType ?? "CGST_SGST"}`
+          : `Tax: ${inv.taxPercent ?? 0}% ${
+              inv.taxLabel || (inv.currency === "EUR" ? "VAT" : "Tax")
+            }`,
         `Payment Terms: ${inv.paymentTermsDays} days`,
-        `Subtotal: ₹${inv.subtotal?.toLocaleString("en-IN")}`,
-        `Total: ₹${inv.total.toLocaleString("en-IN")}`,
+        `Subtotal: ${symbol}${inv.subtotal?.toLocaleString("en-IN")}`,
+        `Total: ${symbol}${inv.total.toLocaleString("en-IN")}`,
         `Line Items:\n${lineItemsStr}`,
         inv.notes ? `Notes: ${inv.notes}` : "",
       ]
@@ -76,55 +81,4 @@ export function findMatchingInvoices(
   if (byNamePrefix.length > 0) return byNamePrefix;
 
   return [];
-}
-
-// ── Extract possible client name from prompt for memory fetch ──
-export function extractClientNameFromPrompt(prompt: string): string | null {
-  const commonWords = new Set([
-    "invoice",
-    "bill",
-    "create",
-    "make",
-    "generate",
-    "for",
-    "to",
-    "with",
-    "and",
-    "or",
-    "gst",
-    "monthly",
-    "the",
-    "a",
-    "an",
-    "in",
-    "on",
-    "at",
-    "from",
-    "by",
-    "per",
-    "hour",
-    "day",
-    "item",
-    "service",
-    "payment",
-    "terms",
-    "days",
-    "net",
-    "add",
-    "change",
-    "update",
-    "edit",
-    "copy",
-    "same",
-    "duplicate",
-    "like",
-    "last",
-    "previous",
-    "next",
-  ]);
-  const words = prompt.split(/\s+/);
-  const candidate = words.find(
-    (w) => w.length > 2 && /^[A-Z]/.test(w) && !commonWords.has(w.toLowerCase())
-  );
-  return candidate || null;
 }

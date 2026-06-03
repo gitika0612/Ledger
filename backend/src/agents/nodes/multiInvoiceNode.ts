@@ -1,5 +1,4 @@
 import { ChatOpenAI } from "@langchain/openai";
-import { PromptTemplate } from "@langchain/core/prompts";
 import { InvoiceAgentState, AgentResult } from "../state";
 import {
   ParsedInvoice,
@@ -30,6 +29,18 @@ const MONTH_NAMES = [
   "December",
 ];
 
+function fillTemplate(template: string, vars: Record<string, string>): string {
+  let result = template;
+  for (const [key, value] of Object.entries(vars)) {
+    result = result.replace(new RegExp(`\\{${key}\\}`, "g"), value);
+  }
+  return result;
+}
+
+function esc(str: string): string {
+  return str ?? "";
+}
+
 function extractExplicitMonths(prompt: string, year: number): string[] {
   const monthAbbrevMap: Record<string, number> = {
     jan: 0,
@@ -58,7 +69,6 @@ function extractExplicitMonths(prompt: string, year: number): string[] {
   };
 
   const lower = prompt.toLowerCase();
-
   const skipSet = new Set<number>();
   const skipRegex =
     /\b(?:skip|except|not\s+includ\w*|exclud\w*)\b\s+([\w\s,]+?)(?:[).!?]|$)/gi;
@@ -76,9 +86,7 @@ function extractExplicitMonths(prompt: string, year: number): string[] {
     const clean = part.replace(/[^a-z]/g, "");
     if (clean in monthAbbrevMap) {
       const idx = monthAbbrevMap[clean];
-      if (!found.includes(idx) && !skipSet.has(idx)) {
-        found.push(idx);
-      }
+      if (!found.includes(idx) && !skipSet.has(idx)) found.push(idx);
     }
   }
 
@@ -165,23 +173,35 @@ function extractClientName(prompt: string): string {
   const possessive = prompt.match(
     /([A-Z][a-zA-Z]+)'s\s+(?:[\d,₹$€]+\s+)?invoice/i
   );
-  if (possessive && !STOP_WORDS.has(possessive[1].toLowerCase())) {
+  if (possessive && !STOP_WORDS.has(possessive[1].toLowerCase()))
     return possessive[1];
-  }
 
   const direct = prompt.match(/^(?:invoice|bill)\s+([A-Z][a-zA-Z]+)/i);
-  if (direct && !STOP_WORDS.has(direct[1].toLowerCase())) {
-    return direct[1];
-  }
+  if (direct && !STOP_WORDS.has(direct[1].toLowerCase())) return direct[1];
 
   return "Client";
 }
 
-// ── Detect currency from prompt ──
 function detectCurrency(prompt: string): "INR" | "USD" | "EUR" {
   if (/\$|USD|dollars?/i.test(prompt)) return "USD";
   if (/€|EUR|euros?/i.test(prompt)) return "EUR";
   return "INR";
+}
+
+// ── Detect GST percent from prompt for INR invoices ──
+function detectGstPercent(prompt: string): number {
+  const match =
+    prompt.match(/(\d+(?:\.\d+)?)\s*%\s*gst/i) ||
+    prompt.match(/gst\s*(?:at|of|@)?\s*(\d+(?:\.\d+)?)\s*%/i);
+  return match ? parseFloat(match[1]) : 18; // default 18%
+}
+
+// ── Detect tax percent from prompt for USD/EUR invoices ──
+function detectTaxPercent(prompt: string): number {
+  const match =
+    prompt.match(/(\d+(?:\.\d+)?)\s*%\s*(?:tax|vat)/i) ||
+    prompt.match(/(?:tax|vat)\s*(?:at|of|@)?\s*(\d+(?:\.\d+)?)\s*%/i);
+  return match ? parseFloat(match[1]) : 0; // default 0 for USD/EUR
 }
 
 export async function multiInvoiceNode(
@@ -202,11 +222,10 @@ export async function multiInvoiceNode(
   });
   const currentDate = now.toISOString().split("T")[0];
 
-  // ── Step 1: Detect how many invoices and which months ──
+  // ── Step 1: Detect how many invoices ──
   const multiStructured = model.withStructuredOutput(multiInvoiceSchema);
-  const multiTemplate = PromptTemplate.fromTemplate(MULTI_DETECT_PROMPT);
-  const multiFormatted = await multiTemplate.format({
-    prompt: state.prompt,
+  const multiFormatted = fillTemplate(MULTI_DETECT_PROMPT, {
+    prompt: esc(state.prompt),
     currentMonth,
     currentDate,
   });
@@ -218,7 +237,7 @@ export async function multiInvoiceNode(
 
   const count = detection.subPrompts.length;
 
-  // ── Step 2: Determine correct months ──
+  // ── Step 2: Determine months ──
   const explicitMonths = extractExplicitMonths(state.prompt, currentYear);
   let expectedMonths: string[];
   let finalCount = count;
@@ -240,15 +259,35 @@ export async function multiInvoiceNode(
     );
   }
 
-  // ── Step 3: Extract base info from prompt ──
+  // ── Step 3: Extract base info ──
   const clientName = extractClientName(state.prompt);
-  const currency = detectCurrency(state.prompt); // ← detect currency
+  const currency = detectCurrency(state.prompt);
   const currencyRates = await buildCurrencyContext();
 
-  // ── Step 4: Generate each invoice ──
-  const invoiceStructured = model.withStructuredOutput(invoiceSchema);
-  const invoiceTemplate = PromptTemplate.fromTemplate(MULTI_INVOICE_PROMPT);
+  // ── Detect tax from prompt — use explicit value or sensible default ──
+  const hasExplicitTax =
+    /\d+\s*%\s*(?:gst|tax|vat)/i.test(state.prompt) ||
+    /(?:gst|tax|vat)\s*(?:at|of|@)?\s*\d+\s*%/i.test(state.prompt);
+  const noTaxMentioned =
+    /no\s*(?:gst|tax|vat)|tax\s*exempt|tax\s*free|0%\s*(?:gst|tax|vat)/i.test(
+      state.prompt
+    );
 
+  const gstPercent =
+    currency === "INR"
+      ? noTaxMentioned
+        ? 0
+        : detectGstPercent(state.prompt) // default 18% for INR
+      : 0;
+  const taxPercent =
+    currency !== "INR"
+      ? noTaxMentioned
+        ? 0
+        : detectTaxPercent(state.prompt) // default 0% for USD/EUR
+      : 0;
+
+  // ── Step 4: Generate invoices ──
+  const invoiceStructured = model.withStructuredOutput(invoiceSchema);
   const parsedInvoices: ParsedInvoice[] = [];
 
   const isMultiClient =
@@ -261,34 +300,42 @@ export async function multiInvoiceNode(
     ).size > 1;
 
   if (isMultiClient) {
-    // ── Multi-client: generate each invoice from its subPrompt ──
+    // ── Multi-client: each from its own subPrompt via GENERATOR_PROMPT ──
     for (const subPrompt of detection.subPrompts) {
-      const currencyRates = await buildCurrencyContext();
-      const generatorTemplate = PromptTemplate.fromTemplate(GENERATOR_PROMPT);
-      const formatted = await generatorTemplate.format({
-        prompt: subPrompt,
-        memoryContext: state.memoryContext ?? "No past invoice history.",
+      const formatted = fillTemplate(GENERATOR_PROMPT, {
+        prompt: esc(subPrompt),
+        memoryContext: "No past invoice history.",
         currentMonth,
         currentDate,
-        currencyRates,
+        currencyRates: esc(currencyRates),
       });
       const raw = (await invoiceStructured.invoke(formatted)) as ParsedInvoice;
       parsedInvoices.push(recalculateTotals(raw));
     }
   } else {
-    // ── Multi-month: pass currency to each invoice ──
+    // ── Multi-month: build basePrompt with explicit tax so MULTI_INVOICE_PROMPT
+    //    doesn't default to 0 for INR invoices ──
+    let basePromptWithTax = state.prompt;
+
+    if (currency === "INR" && !hasExplicitTax && !noTaxMentioned) {
+      // Append default GST so the LLM doesn't guess
+      basePromptWithTax = `${state.prompt} with 18% CGST_SGST`;
+    } else if (currency !== "INR" && noTaxMentioned) {
+      basePromptWithTax = `${state.prompt} no tax`;
+    }
+
     for (let i = 0; i < finalCount; i++) {
       const invoiceMonth = expectedMonths[i];
       const invoiceDate = monthToDate(invoiceMonth);
-      const formatted = await invoiceTemplate.format({
+      const formatted = fillTemplate(MULTI_INVOICE_PROMPT, {
         index: String(i + 1),
         total: String(finalCount),
-        basePrompt: state.prompt,
+        basePrompt: esc(basePromptWithTax),
         invoiceMonth,
         invoiceDate,
         clientName,
-        currency, // ← added
-        memoryContext: state.memoryContext,
+        currency,
+        memoryContext: "No past invoice history.",
       });
       const raw = (await invoiceStructured.invoke(formatted)) as ParsedInvoice;
       parsedInvoices.push(
@@ -297,7 +344,14 @@ export async function multiInvoiceNode(
           clientName,
           invoiceMonth,
           invoiceDate,
-          currency, // ← ensure currency is preserved
+          currency,
+          // ── Enforce detected tax — never let MULTI_INVOICE_PROMPT override ──
+          gstPercent: currency === "INR" ? gstPercent : 0,
+          gstType:
+            raw.gstType === "IGST" && !/igst|inter.state/i.test(state.prompt)
+              ? "CGST_SGST" // fix IGST default
+              : raw.gstType,
+          taxPercent: currency !== "INR" ? taxPercent : 0,
         })
       );
     }
@@ -313,7 +367,7 @@ export async function multiInvoiceNode(
     })
   );
 
-  // ── Step 6: Summary message ──
+  // ── Step 6: Summary ──
   const totalSum = parsedInvoices.reduce((sum, inv) => sum + inv.total, 0);
   const summaryLabel = isMultiClient
     ? parsedInvoices

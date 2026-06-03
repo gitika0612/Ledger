@@ -6,6 +6,7 @@ import { editorNode } from "./nodes/editorNode";
 import { copierNode } from "./nodes/copierNode";
 import { multiInvoiceNode } from "./nodes/multiInvoiceNode";
 import { pendingReplyNode } from "./nodes/pendingReplyNode";
+import { queryNode } from "./nodes/queryNode";
 import { IInvoiceDocument } from "../models/Invoice";
 import { ParsedInvoice } from "./schemas/invoiceSchema";
 import {
@@ -88,7 +89,6 @@ const AgentStateAnnotation = Annotation.Root({
     reducer: (x, y) => y ?? x,
     default: () => null,
   }),
-  // pending state from frontend ──
   pendingState: Annotation<PendingStateContext | null>({
     reducer: (x, y) => y ?? x,
     default: () => null,
@@ -97,13 +97,13 @@ const AgentStateAnnotation = Annotation.Root({
 
 type AgentState = typeof AgentStateAnnotation.State;
 
-// ── If pendingState is set, skip router and go straight to pendingReplyNode ──
 function routeFromStart(state: AgentState): string {
   if (state.pendingState) return "pendingReply";
   return "router";
 }
 
 function routeAfterRouter(state: AgentState): string {
+  if (state.intent === "query") return "query";
   if (state.isMultiple || state.intent === "multi") return "multiInvoice";
   if (state.intent === "edit") return "editor";
   if (state.intent === "copy") return "copier";
@@ -124,11 +124,13 @@ export function createInvoiceAgent() {
     .addNode("copier", copierNode)
     .addNode("multiInvoice", multiInvoiceNode)
     .addNode("pendingReply", pendingReplyNode)
+    .addNode("query", queryNode)
     .addConditionalEdges(START, routeFromStart, {
       pendingReply: "pendingReply",
       router: "router",
     })
     .addConditionalEdges("router", routeAfterRouter, {
+      query: "query",
       rag: "rag",
       editor: "editor",
       copier: "copier",
@@ -142,7 +144,8 @@ export function createInvoiceAgent() {
     .addEdge("generator", END)
     .addEdge("editor", END)
     .addEdge("copier", END)
-    .addEdge("pendingReply", END);
+    .addEdge("pendingReply", END)
+    .addEdge("query", END);
 
   return graph.compile();
 }
@@ -161,7 +164,6 @@ export async function runInvoiceAgent(input: {
   userId: string;
   sessionId: string;
   sessionContext: string;
-  memoryContext?: string;
   parsedInvoice?: ParsedInvoice | null;
   pendingState?: PendingStateContext | null;
 }): Promise<AgentState> {
@@ -170,8 +172,6 @@ export async function runInvoiceAgent(input: {
     ...initialState,
     ...input,
     parsedInvoice: input.parsedInvoice || null,
-    memoryContext:
-      input.memoryContext || "No past invoice history for this client.",
     pendingState: input.pendingState || null,
   });
   return result as AgentState;
