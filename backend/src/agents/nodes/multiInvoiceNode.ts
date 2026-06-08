@@ -68,7 +68,21 @@ function extractExplicitMonths(prompt: string, year: number): string[] {
     december: 11,
   };
 
+  const QUARTERS: Record<string, number[]> = {
+    q1: [0, 1, 2],
+    q2: [3, 4, 5],
+    q3: [6, 7, 8],
+    q4: [9, 10, 11],
+  };
   const lower = prompt.toLowerCase();
+  for (const [q, months] of Object.entries(QUARTERS)) {
+    const qMatch = lower.match(new RegExp(`\\b${q}\\b\\s*(\\d{4})?`));
+    if (qMatch) {
+      const qYear = qMatch[1] ? parseInt(qMatch[1]) : year;
+      return months.map((idx) => `${MONTH_NAMES[idx]} ${qYear}`);
+    }
+  }
+
   const skipSet = new Set<number>();
   const skipRegex =
     /\b(?:skip|except|not\s+includ\w*|exclud\w*)\b\s+([\w\s,]+?)(?:[).!?]|$)/gi;
@@ -89,7 +103,6 @@ function extractExplicitMonths(prompt: string, year: number): string[] {
       if (!found.includes(idx) && !skipSet.has(idx)) found.push(idx);
     }
   }
-
   return found.map((idx) => `${MONTH_NAMES[idx]} ${year}`);
 }
 
@@ -188,20 +201,32 @@ function detectCurrency(prompt: string): "INR" | "USD" | "EUR" {
   return "INR";
 }
 
-// ── Detect GST percent from prompt for INR invoices ──
 function detectGstPercent(prompt: string): number {
   const match =
     prompt.match(/(\d+(?:\.\d+)?)\s*%\s*gst/i) ||
     prompt.match(/gst\s*(?:at|of|@)?\s*(\d+(?:\.\d+)?)\s*%/i);
-  return match ? parseFloat(match[1]) : 18; // default 18%
+  return match ? parseFloat(match[1]) : 18;
 }
 
-// ── Detect tax percent from prompt for USD/EUR invoices ──
 function detectTaxPercent(prompt: string): number {
   const match =
     prompt.match(/(\d+(?:\.\d+)?)\s*%\s*(?:tax|vat)/i) ||
     prompt.match(/(?:tax|vat)\s*(?:at|of|@)?\s*(\d+(?:\.\d+)?)\s*%/i);
-  return match ? parseFloat(match[1]) : 0; // default 0 for USD/EUR
+  return match ? parseFloat(match[1]) : 0;
+}
+
+function extractPerInvoiceAmount(prompt: string): number | null {
+  const m1 = prompt.match(
+    /[₹]([0-9,]+(?:\.[0-9]+)?)\s*(?:\/month|per\s+month)?(?:\s+for\b|\s+with\b|\s*$)/i
+  );
+  if (m1) return parseInt(m1[1].replace(/,/g, ""));
+  const m2 = prompt.match(/[₹]([0-9,]+)/);
+  if (m2) return parseInt(m2[1].replace(/,/g, ""));
+  const m3 = prompt.match(/\$([0-9,]+(?:\.[0-9]+)?)/);
+  if (m3) return parseFloat(m3[1].replace(/,/g, ""));
+  const m4 = prompt.match(/€([0-9,]+(?:\.[0-9]+)?)/);
+  if (m4) return parseFloat(m4[1].replace(/,/g, ""));
+  return null;
 }
 
 export async function multiInvoiceNode(
@@ -264,12 +289,11 @@ export async function multiInvoiceNode(
   const currency = detectCurrency(state.prompt);
   const currencyRates = await buildCurrencyContext();
 
-  // ── Detect tax from prompt — use explicit value or sensible default ──
   const hasExplicitTax =
     /\d+\s*%\s*(?:gst|tax|vat)/i.test(state.prompt) ||
     /(?:gst|tax|vat)\s*(?:at|of|@)?\s*\d+\s*%/i.test(state.prompt);
   const noTaxMentioned =
-    /no\s*(?:gst|tax|vat)|tax\s*exempt|tax\s*free|0%\s*(?:gst|tax|vat)/i.test(
+    /no\s*(?:gst|tax|vat)|tax\s*exempt|tax\s*free|\b0%\s*(?:gst|tax|vat)/i.test(
       state.prompt
     );
 
@@ -277,13 +301,13 @@ export async function multiInvoiceNode(
     currency === "INR"
       ? noTaxMentioned
         ? 0
-        : detectGstPercent(state.prompt) // default 18% for INR
+        : detectGstPercent(state.prompt)
       : 0;
   const taxPercent =
     currency !== "INR"
       ? noTaxMentioned
         ? 0
-        : detectTaxPercent(state.prompt) // default 0% for USD/EUR
+        : detectTaxPercent(state.prompt)
       : 0;
 
   // ── Step 4: Generate invoices ──
@@ -300,8 +324,21 @@ export async function multiInvoiceNode(
     ).size > 1;
 
   if (isMultiClient) {
-    // ── Multi-client: each from its own subPrompt via GENERATOR_PROMPT ──
     for (const subPrompt of detection.subPrompts) {
+      const subCurrency = detectCurrency(subPrompt);
+      const subGstPercent =
+        subCurrency === "INR"
+          ? /no\s*(gst|tax)/i.test(subPrompt)
+            ? 0
+            : detectGstPercent(subPrompt)
+          : 0;
+      const subTaxPercent =
+        subCurrency !== "INR"
+          ? /no\s*(tax|vat)/i.test(subPrompt)
+            ? 0
+            : detectTaxPercent(subPrompt)
+          : 0;
+
       const formatted = fillTemplate(GENERATOR_PROMPT, {
         prompt: esc(subPrompt),
         memoryContext: "No past invoice history.",
@@ -310,19 +347,65 @@ export async function multiInvoiceNode(
         currencyRates: esc(currencyRates),
       });
       const raw = (await invoiceStructured.invoke(formatted)) as ParsedInvoice;
-      parsedInvoices.push(recalculateTotals(raw));
+
+      // Extract clientName from subprompt directly — don't trust LLM for this
+      const subClientName =
+        subPrompt.match(/^Invoice\s+([A-Z][a-zA-Z]+)/i)?.[1] ||
+        subPrompt.match(/\bfor\s+([A-Z][a-zA-Z]+)/i)?.[1] ||
+        raw.clientName ||
+        "Client";
+
+      let enforced = recalculateTotals({
+        ...raw,
+        clientName: subClientName,
+        currency: subCurrency,
+        gstPercent: subGstPercent,
+        gstType: raw.gstType ?? "CGST_SGST",
+        taxPercent: subTaxPercent,
+        taxLabel:
+          subCurrency === "EUR" ? "VAT" : subCurrency === "USD" ? "Tax" : "",
+      });
+
+      // ── Enforce stated amount from subprompt ──
+      const subAmounts = [
+        ...subPrompt.matchAll(/[₹$€]([0-9,]+(?:\.[0-9]+)?)/g),
+      ];
+      if (subAmounts.length === 1 && enforced.lineItems?.length > 0) {
+        const subStatedBase = parseInt(subAmounts[0][1].replace(/,/g, ""));
+        const llmAmt = enforced.lineItems[0].amount;
+        const absDiff = Math.abs(llmAmt - subStatedBase);
+        if (
+          absDiff > 0 &&
+          (absDiff / subStatedBase > 0.005 ||
+            (subStatedBase % 100 === 0 && absDiff <= 10))
+        ) {
+          enforced = recalculateTotals({
+            ...enforced,
+            lineItems: [
+              {
+                ...enforced.lineItems[0],
+                amount: subStatedBase,
+                rate: subStatedBase,
+              },
+            ],
+          });
+          console.log(
+            `✅ Multi-client amount corrected for ${subClientName}: ${llmAmt} → ${subStatedBase}`
+          );
+        }
+      }
+
+      parsedInvoices.push(enforced);
     }
   } else {
-    // ── Multi-month: build basePrompt with explicit tax so MULTI_INVOICE_PROMPT
-    //    doesn't default to 0 for INR invoices ──
     let basePromptWithTax = state.prompt;
-
     if (currency === "INR" && !hasExplicitTax && !noTaxMentioned) {
-      // Append default GST so the LLM doesn't guess
       basePromptWithTax = `${state.prompt} with 18% CGST_SGST`;
     } else if (currency !== "INR" && noTaxMentioned) {
       basePromptWithTax = `${state.prompt} no tax`;
     }
+
+    const statedAmount = extractPerInvoiceAmount(state.prompt);
 
     for (let i = 0; i < finalCount; i++) {
       const invoiceMonth = expectedMonths[i];
@@ -338,22 +421,51 @@ export async function multiInvoiceNode(
         memoryContext: "No past invoice history.",
       });
       const raw = (await invoiceStructured.invoke(formatted)) as ParsedInvoice;
-      parsedInvoices.push(
-        recalculateTotals({
-          ...raw,
-          clientName,
-          invoiceMonth,
-          invoiceDate,
-          currency,
-          // ── Enforce detected tax — never let MULTI_INVOICE_PROMPT override ──
-          gstPercent: currency === "INR" ? gstPercent : 0,
-          gstType:
-            raw.gstType === "IGST" && !/igst|inter.state/i.test(state.prompt)
-              ? "CGST_SGST" // fix IGST default
-              : raw.gstType,
-          taxPercent: currency !== "INR" ? taxPercent : 0,
-        })
-      );
+      let inv = recalculateTotals({
+        ...raw,
+        clientName,
+        invoiceMonth,
+        invoiceDate,
+        currency,
+        gstPercent: currency === "INR" ? gstPercent : 0,
+        gstType:
+          raw.gstType === "IGST" && !/igst|inter.state/i.test(state.prompt)
+            ? "CGST_SGST"
+            : raw.gstType,
+        taxPercent: currency !== "INR" ? taxPercent : 0,
+      });
+
+      // ── Enforce stated amount — LLM sometimes hallucinates different amounts ──
+      if (statedAmount !== null && inv.lineItems?.length > 0) {
+        const llmAmount = inv.lineItems[0].amount;
+        const absDiff = Math.abs(llmAmount - statedAmount);
+        if (
+          absDiff > 0 &&
+          (absDiff / statedAmount > 0.005 ||
+            (statedAmount % 100 === 0 && absDiff <= 10))
+        ) {
+          console.log(
+            `⚠️ Multi-invoice amount mismatch for ${invoiceMonth}: LLM=${llmAmount}, correcting to ${statedAmount}`
+          );
+          inv = recalculateTotals({
+            ...inv,
+            lineItems: [
+              { ...inv.lineItems[0], amount: statedAmount, rate: statedAmount },
+            ],
+          });
+        }
+      }
+
+      // ── Enforce paymentTermsDays — LLM returns 0 for some months ──
+      if (!inv.paymentTermsDays || inv.paymentTermsDays === 0) {
+        inv = {
+          ...inv,
+          paymentTermsDays:
+            raw.paymentTermsDays > 0 ? raw.paymentTermsDays : 15,
+        };
+      }
+
+      parsedInvoices.push(inv);
     }
   }
 
@@ -368,6 +480,10 @@ export async function multiInvoiceNode(
   );
 
   // ── Step 6: Summary ──
+  // For mixed currency batches, don't sum totals — currencies can't be combined
+  const allSameCurrency = parsedInvoices.every(
+    (inv) => inv.currency === parsedInvoices[0].currency
+  );
   const totalSum = parsedInvoices.reduce((sum, inv) => sum + inv.total, 0);
   const summaryLabel = isMultiClient
     ? parsedInvoices
@@ -378,14 +494,16 @@ export async function multiInvoiceNode(
         .join(", ")
     : `**${clientName}** (${expectedMonths.join(", ")})`;
 
+  const totalLine = allSameCurrency
+    ? `\n\nTotal value: **${formatCurrency(
+        totalSum,
+        parsedInvoices[0].currency
+      )}**`
+    : "";
+
   const result: AgentResult = {
     action: "multi_created",
-    message: `Done! Prepared **${
-      parsedInvoices.length
-    } invoices** for ${summaryLabel}.\n\nTotal value: **${formatCurrency(
-      totalSum,
-      currency
-    )}**\n\nReview each invoice in the side panel.`,
+    message: `Done! Prepared **${parsedInvoices.length} invoices** for ${summaryLabel}.${totalLine}\n\nReview each invoice in the side panel.`,
     invoices: parsedInvoices,
     invoicesWithMatch,
   };

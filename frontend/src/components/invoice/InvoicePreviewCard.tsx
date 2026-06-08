@@ -53,6 +53,7 @@ export interface ParsedInvoice {
   subtotal: number;
   taxableAmount?: number;
   total: number;
+  isTaxInclusive?: boolean;
   paymentTermsDays: number;
   invoiceDate?: string;
   invoiceMonth?: string;

@@ -37,21 +37,81 @@ If the prompt is for a DIFFERENT client, IGNORE the history entirely.
 If history shows past rates/terms → use them as DEFAULTS only for fields not specified in the current prompt.
 CRITICAL: ALWAYS use the amount/rate from the CURRENT PROMPT. History is reference only — never override prompt amounts.
 
+━━━ isTaxInclusive FLAG — READ THIS FIRST, BEFORE ANYTHING ELSE ━━━
+
+STEP 1: Look for these EXACT words in the prompt:
+  "inclusive", "included", "including", "incl."
+
+  IF any of these words appear → isTaxInclusive = TRUE  (stated price CONTAINS tax already)
+  IF none appear              → isTaxInclusive = FALSE (tax will be ADDED ON TOP)
+
+THAT IS THE COMPLETE RULE. Do not overthink it.
+
+isTaxInclusive = TRUE ONLY when these words appear:
+  "inclusive of X%..."        → TRUE
+  "VAT included..."           → TRUE
+  "tax included..."           → TRUE
+  "GST included..."           → TRUE
+  "including X% tax..."       → TRUE
+
+isTaxInclusive = FALSE for ALL other cases including:
+  "with X% tax"               → FALSE ← "with" does NOT mean inclusive
+  "with X% VAT"               → FALSE ← "with" does NOT mean inclusive
+  "with X% GST"               → FALSE ← "with" does NOT mean inclusive
+  "plus X% tax"               → FALSE
+  "excluding tax"             → FALSE
+  "no tax"                    → FALSE
+  no tax mention              → FALSE
+
+HARD EXAMPLES — memorise these:
+  "€5,000 with 20% VAT"           → isTaxInclusive=FALSE  → total = 5000 + 1000 = €6,000
+  "€5,900 VAT included at 18%"    → isTaxInclusive=TRUE   → back-calc, total stays €5,900
+  "$5,000 with 10% tax"           → isTaxInclusive=FALSE  → total = 5000 + 500 = $5,500
+  "$5,500 inclusive of 10% tax"   → isTaxInclusive=TRUE   → back-calc, total stays $5,500
+  "₹30,000 with 18% GST"          → isTaxInclusive=FALSE  → total = 30000 + 5400 = ₹35,400
+  "₹1,18,000 inclusive of 18% GST"→ isTaxInclusive=TRUE   → back-calc, total stays ₹1,18,000
+  "€8,000 with IGST 18%"          → isTaxInclusive=FALSE  → total = 8000 + 1440 = €9,440
+  "€3,500 VAT included"           → isTaxInclusive=TRUE   → no rate given → warn, total=€3,500
+
 ━━━ LINE ITEMS ━━━
 CRITICAL: ALWAYS produce at least one line item. NEVER return empty lineItems array.
-If only a total amount is given with no service description → create one line item: description="Services", qty=1, unit="item", rate=[amount], amount=[amount]
+If only a total amount is given with no service description → create one line item: description="Services", qty=1, unit="item", rate=[see below], amount=[see below]
 
-Parse ONLY what the user explicitly mentions. Do NOT invent items from history.
-• "Invoice Olivia $7,500 tax exempt"  → lineItems=[{Services, qty:1, rate:7500, amount:7500}]
-• "Invoice John $2,000 excluding tax" → lineItems=[{Services, qty:1, rate:2000, amount:2000}]
-• "Invoice Emma €15,000 inclusive of VAT" → lineItems=[{Services, qty:1, rate:15000, amount:15000}]
-• "5 days Next.js at ₹10k/day"       → qty=5 unit="day" rate=10000 amount=50000 currency="INR"
-• "5 days Next.js at $500/day"        → qty=5 unit="day" rate=500 amount=2500 currency="USD"
-• "40hrs React consulting $150/hr"    → qty=40 unit="hour" rate=150 amount=6000 currency="USD"
-• "logo ₹20k, guidelines ₹15k"       → 2 items at those exact amounts, currency="INR"
-• "€2,000 for web design"            → qty=1 unit="item" rate=2000 amount=2000 currency="EUR"
-• "₹1L — 40% design, 60% dev"        → 2 items: Design ₹40000, Dev ₹60000, currency="INR"
-• "₹50k for web maintenance"          → qty=1 unit="item" rate=50000 amount=50000 currency="INR"
+CRITICAL FOR TAX-INCLUSIVE WITH A RATE (isTaxInclusive=TRUE, rate > 0):
+  lineItem.rate = lineItem.amount = back-calculated PRE-TAX amount (NOT the stated total)
+  Formula: lineItem.amount = round(statedTotal ÷ (1 + taxRate/100))
+  "$1,180 inclusive of 18% tax"    → lineItem.amount = round(1180/1.18) = 1000  ✓ NOT 1180
+  "€2,360 VAT included at 18%"     → lineItem.amount = round(2360/1.18) = 2000  ✓ NOT 2360
+  "₹1,18,000 inclusive of 18% GST" → lineItem.amount = round(118000/1.18) = 100000 ✓
+
+CRITICAL FOR TAX-INCLUSIVE WITHOUT A RATE (isTaxInclusive=TRUE, no rate given):
+  Rate is unknown — cannot back-calculate.
+  lineItem.rate = lineItem.amount = statedTotal (the full stated amount)
+  taxAmount = 0, taxPercent = 0
+  total = statedTotal (unchanged)
+  warning = "Tax rate not specified — set to 0%. Please update if needed."
+  "€3,500 VAT included"    → lineItem.amount = 3500, taxAmount=0, total=3500, warning set ✓
+  "€15,000 inclusive of VAT" → lineItem.amount = 15000, taxAmount=0, total=15000, warning set ✓
+
+FOR NON-INCLUSIVE (isTaxInclusive=FALSE):
+  lineItem.rate = lineItem.amount = the stated price as-is
+  "$5,000 with 10% tax"   → lineItem.amount = 5000 (tax gets added on top → total=5500)
+  "€5,000 with 20% VAT"   → lineItem.amount = 5000 (VAT gets added on top → total=6000)
+  DO NOT back-calculate for "with X%" — it always means ADD ON TOP
+
+Other line item examples:
+• "Invoice Olivia $7,500 tax exempt"       → lineItems=[{Services, qty:1, rate:7500, amount:7500}], isTaxInclusive=false
+• "Invoice John $2,000 excluding tax"      → lineItems=[{Services, qty:1, rate:2000, amount:2000}], isTaxInclusive=false
+• "Invoice Noah €5,000 with 20% VAT"      → lineItems=[{Services, qty:1, rate:5000, amount:5000}], isTaxInclusive=false
+• "Invoice Lucas $1,180 inclusive of 18% tax" → lineItems=[{Services, qty:1, rate:1000, amount:1000}], isTaxInclusive=true
+• "Invoice Emma €2,360 VAT included at 18%"   → lineItems=[{Services, qty:1, rate:2000, amount:2000}], isTaxInclusive=true
+• "5 days Next.js at ₹10k/day"            → qty=5 unit="day" rate=10000 amount=50000 currency="INR"
+• "5 days Next.js at $500/day"            → qty=5 unit="day" rate=500 amount=2500 currency="USD"
+• "40hrs React consulting $150/hr"        → qty=40 unit="hour" rate=150 amount=6000 currency="USD"
+• "logo ₹20k, guidelines ₹15k"           → 2 items at those exact amounts, currency="INR"
+• "€2,000 for web design"               → qty=1 unit="item" rate=2000 amount=2000 currency="EUR"
+• "₹1L — 40% design, 60% dev"           → 2 items: Design ₹40000, Dev ₹60000, currency="INR"
+• "₹50k for web maintenance"             → qty=1 unit="item" rate=50000 amount=50000 currency="INR"
 
 ━━━ GST RULES (INR ONLY) ━━━
 • Default: gstPercent=18, gstType="CGST_SGST" — ALWAYS use CGST_SGST unless prompt explicitly says IGST or inter-state
@@ -59,14 +119,14 @@ Parse ONLY what the user explicitly mentions. Do NOT invent items from history.
 • "12% GST" / "5% GST"              → use that percent
 • "IGST" / "inter-state"            → gstType="IGST" (ONLY when explicitly stated)
 • If prompt says nothing about GST type → ALWAYS use gstType="CGST_SGST"
-• "with X% GST"                     → base price, GST added ON TOP
-  Example: "₹30,000 with 5% GST" → subtotal=30000, gstAmount=1500, total=31500
-• "GST included" / "inclusive of GST" / "including GST" / "incl. GST" / "GST included at X%":
-  The stated amount IS the FINAL TOTAL containing GST. Back-calculate:
+• "with X% GST" → isTaxInclusive=FALSE, base price, GST added ON TOP
+  Example: "₹30,000 with 5% GST" → subtotal=30000, gstAmount=1500, total=31500, isTaxInclusive=false
+• "GST included" / "inclusive of GST" / "including GST" → isTaxInclusive=TRUE
+  The stated amount IS the FINAL TOTAL. Back-calculate:
   → gstAmount = round(total × gstRate ÷ (100 + gstRate))
-  → lineItem amount = total − gstAmount
+  → lineItem.amount = total − gstAmount
   → total stays EXACTLY as stated
-  EXAMPLE: "₹1,18,000 inclusive of 18% GST" → subtotal=100000, gstAmount=18000, total=118000 ✓
+  EXAMPLE: "₹1,18,000 inclusive of 18% GST" → lineItem.amount=100000, gstAmount=18000, total=118000, isTaxInclusive=true ✓
 
 ━━━ CRITICAL: GST/IGST ON EUR/USD INVOICES — READ THIS FIRST ━━━
 BEFORE applying any tax rule below, check: is the currency EUR or USD?
@@ -74,113 +134,76 @@ If YES → ALL tax keywords (GST, IGST, VAT, Tax) are treated as taxPercent/taxA
 NEVER use gstPercent/gstAmount for EUR or USD invoices.
 
 RATE SPECIFIED → back-calculate or add tax, set warning="" (empty):
-- "GST included at X%" on EUR → treat as "VAT included at X%" → back-calculate
-  EXAMPLE: "€2,360 GST included at 18%" → currency=EUR, taxPercent=18, subtotal=2000, taxAmount=360, total=2360, taxLabel="VAT", warning=""
-- "GST included at X%" on USD → treat as "Tax included at X%" → back-calculate
-  EXAMPLE: "$1,180 GST included at 18%" → currency=USD, taxPercent=18, subtotal=1000, taxAmount=180, total=1180, taxLabel="Tax", warning=""
-- "with IGST X%" on EUR → treat as VAT added on top
-  EXAMPLE: "€8,000 with IGST 18%" → currency=EUR, taxPercent=18, taxAmount=1440, total=9440, taxLabel="VAT", warning=""
-- "with GST X%" on USD → treat as Tax added on top
-  EXAMPLE: "$5,000 with GST 10%" → currency=USD, taxPercent=10, taxAmount=500, total=5500, taxLabel="Tax", warning=""
+- "GST included at X%" on EUR → isTaxInclusive=TRUE, treat as "VAT included at X%" → back-calculate
+  EXAMPLE: "€2,360 GST included at 18%" → isTaxInclusive=true, taxPercent=18, lineItem.amount=2000, taxAmount=360, total=2360, taxLabel="VAT"
+- "GST included at X%" on USD → isTaxInclusive=TRUE, treat as "Tax included at X%" → back-calculate
+  EXAMPLE: "$1,180 GST included at 18%" → isTaxInclusive=true, taxPercent=18, lineItem.amount=1000, taxAmount=180, total=1180, taxLabel="Tax"
+- "with IGST X%" on EUR → isTaxInclusive=FALSE, treat as VAT added on top
+  EXAMPLE: "€8,000 with IGST 18%" → isTaxInclusive=false, taxPercent=18, taxAmount=1440, total=9440, taxLabel="VAT"
+- "with GST X%" on USD → isTaxInclusive=FALSE, treat as Tax added on top
+  EXAMPLE: "$5,000 with GST 10%" → isTaxInclusive=false, taxPercent=10, taxAmount=500, total=5500, taxLabel="Tax"
 
 NO RATE → set taxPercent=0, taxAmount=0, warning="Tax rate not specified — set to 0%. Please update if needed."
-- "GST included" on EUR WITHOUT a rate → warning (rate unknown)
-- "VAT included" on EUR WITHOUT a rate → warning (rate unknown)
-
-RULE: When a rate IS given (e.g. "at 18%", "18%", "@ 18%") → back-calculate or add. warning="" (empty).
-RULE: When NO rate is given → taxPercent=0, taxAmount=0, warning="Tax rate not specified..."
 
 ━━━ TAX RULES (USD/EUR) ━━━
 Use taxPercent / taxAmount / taxLabel fields. Never touch GST fields for USD/EUR.
 
 DETECTION RULES:
 • "with X% tax" / "with X% VAT" / "X% tax" / "X% VAT"
+  → isTaxInclusive=FALSE
   → taxPercent=X, taxAmount=round(taxableAmount × X / 100), total=taxableAmount+taxAmount
-  Example: "$5,000 with 10% tax" → subtotal=5000, taxPercent=10, taxAmount=500, total=5500
+  Example: "$5,000 with 10% tax" → isTaxInclusive=false, subtotal=5000, taxPercent=10, taxAmount=500, total=5500
 
 • "no tax" / "0% tax" / "tax exempt" / "tax free" / "no VAT" / "0% VAT"
-  → taxPercent=0, taxAmount=0, total=subtotal, warning=""
+  → isTaxInclusive=FALSE, taxPercent=0, taxAmount=0, total=subtotal, warning=""
 
-• "tax included" / "inclusive of tax" / "including tax" / "tax inclusive"
-  / "VAT included" / "inclusive of VAT" / "including VAT" / "VAT inclusive"
-  WITH a rate stated (e.g. "inclusive of 10% tax" / "at 18%" / "@ 18%"):
+• "tax included" / "inclusive of tax" / "including tax"
+  / "VAT included" / "inclusive of VAT" / "including VAT"
+  WITH a rate stated:
+  → isTaxInclusive=TRUE
   → Back-calculate: taxAmount = round(total × rate ÷ (100 + rate))
-  → lineItem amount = total − taxAmount
+  → lineItem.amount = total − taxAmount  (PRE-TAX amount, NOT the stated total)
   → total stays EXACTLY as stated
-  → warning="" (empty — rate IS specified)
-  EXAMPLE: "$1,100 inclusive of 10% tax" → subtotal=1000, taxAmount=100, total=1100, warning="" ✓
-  EXAMPLE: "€2,360 VAT included at 18%" → subtotal=2000, taxAmount=360, total=2360, warning="" ✓
-  EXAMPLE: "$1,180 inclusive of 18% tax" → subtotal=1000, taxAmount=180, total=1180, warning="" ✓
+  → warning=""
+  EXAMPLE: "$1,100 inclusive of 10% tax" → isTaxInclusive=true, lineItem.amount=1000, taxAmount=100, total=1100 ✓
+  EXAMPLE: "€2,360 VAT included at 18%" → isTaxInclusive=true, lineItem.amount=2000, taxAmount=360, total=2360 ✓
 
-• "tax included" / "VAT included" / "inclusive of VAT" / "including VAT" WITHOUT a rate:
-  → taxPercent=0, taxAmount=0, total=subtotal
+• "tax included" / "VAT included" WITHOUT a rate:
+  → isTaxInclusive=TRUE, taxPercent=0, taxAmount=0, total=subtotal (lineItem.amount=total)
   → warning="Tax rate not specified — set to 0%. Please update if needed."
-  KEY: Only warn when there is NO percentage anywhere in the prompt.
-  EXAMPLE: "€3,500 VAT included" → total=3500, taxAmount=0, warning="Tax rate not specified — set to 0%. Please update if needed."
-  EXAMPLE: "€15,000 inclusive of VAT" → total=15000, taxAmount=0, warning="Tax rate not specified — set to 0%. Please update if needed."
 
-• "plus tax" / "ex. tax" WITHOUT a rate:
-  → taxPercent=0, taxAmount=0, total=subtotal
+• "plus tax" WITHOUT a rate:
+  → isTaxInclusive=FALSE, taxPercent=0, taxAmount=0, total=subtotal
   → warning="Tax rate not specified — set to 0%. Please update if needed."
-  (signals tax WILL be added but rate unknown)
-  EXAMPLE: "$10,000 plus tax" → total=10000, taxAmount=0, warning="Tax rate not specified — set to 0%. Please update if needed."
 
-• "excluding tax" / "excluding VAT" / "ex. VAT" / "ex tax" / "no tax":
-  → taxPercent=0, taxAmount=0, total=subtotal, warning="" (empty — stated price does not include tax, create as-is)
-  EXAMPLE: "$2,000 excluding tax" → total=2000, taxPercent=0, taxAmount=0, warning=""
-  EXAMPLE: "€5,000 excluding VAT" → total=5000, taxPercent=0, taxAmount=0, warning=""
-  EXAMPLE: "Invoice John $10,000 no tax" → total=10000, taxPercent=0, taxAmount=0, warning=""
+• "excluding tax" / "ex. VAT" / "no tax":
+  → isTaxInclusive=FALSE, taxPercent=0, taxAmount=0, total=subtotal, warning=""
 
-• No tax mentioned at all → taxPercent=0, taxAmount=0, total=subtotal, warning="" (empty)
-
-DISAMBIGUATION — "with tax" vs "tax included":
-• "$5,000 with 10% tax"         → base is 5000, ADD tax → total=5500, warning=""
-• "$5,500 tax included at 10%"  → total IS 5500, BACK-CALCULATE → subtotal=5000, warning=""
-• "$5,000 plus tax"             → base is 5000, rate unknown → taxPercent=0, warning="Tax rate not specified..."
-• "$5,000 excluding VAT"        → base is 5000, no tax → taxPercent=0, total=5000, warning=""
-Key signal: "included" / "inclusive" / "including" WITH a % = back-calculate, no warning.
-Key signal: "plus tax" WITHOUT a % = unknown rate, warn.
-Key signal: "excluding" / "ex." = tax-free price, NO warning.
-Key signal: "included" / "inclusive" WITHOUT any % = unknown rate, warn.
-
-EXAMPLES — your full test suite:
-• "Invoice Sarah $5,000 with 10% tax"           → taxPercent=10, taxAmount=500, total=5500, taxLabel="Tax", warning=""
-• "Invoice Alex $10,000 with 15% discount and 8% tax" → discount first, then 8% tax on taxableAmount, warning=""
-• "Invoice Olivia USD 7,500 no tax"              → taxPercent=0, taxAmount=0, total=7500, warning=""
-• "Invoice Noah €5,000 with 20% VAT"            → taxPercent=20, taxAmount=1000, total=6000, taxLabel="VAT", warning=""
-• "Invoice Emma €3,500 VAT included"             → taxPercent=0, taxAmount=0, total=3500, warning="Tax rate not specified..."
-• "Invoice Liam €10,000 with 5% discount and 19% VAT" → discount 5%=€500, taxable=€9500, VAT=€1805, total=€11305, warning=""
-• "Invoice Isabella €1,200 no VAT payment terms 45 days" → taxPercent=0, total=1200, paymentTermsDays=45, warning=""
-• "Invoice Emma $1,180 inclusive of 18% tax"    → back-calc: subtotal=1000, taxAmount=180, total=1180, warning=""
-• "Invoice Lucas €2,360 VAT included at 18%"    → back-calc: subtotal=2000, taxAmount=360, total=2360, warning=""
-• "Invoice Lucas €2,360 GST included at 18%"    → EUR invoice: treat as VAT included at 18%, back-calc: subtotal=2000, taxAmount=360, total=2360, taxLabel="VAT", warning=""
-• "Invoice Gitika €2,360 GST included at 18%"   → EUR invoice: treat as VAT included at 18%, back-calc: subtotal=2000, taxAmount=360, total=2360, taxLabel="VAT", warning=""
-• "Invoice Olivia $5,000 tax exempt"            → taxPercent=0, total=5000, warning=""
-• "Invoice Noah €8,000 with IGST 18%"           → EUR invoice: treat as VAT 18% added on top: taxPercent=18, taxAmount=1440, total=9440, taxLabel="VAT", warning=""
-• "Invoice Sarah $10,000 with 0% tax"           → taxPercent=0, total=10000, warning=""
-• "Invoice Michael €15,000 inclusive of VAT"    → taxPercent=0, total=15000, warning="Tax rate not specified..."
-• "Invoice Emma $2,000 plus tax"                → taxPercent=0, total=2000, warning="Tax rate not specified..."
-• "Invoice Lucas €5,000 excluding VAT"          → taxPercent=0, total=5000, warning=""
-• "Invoice Sarah $10,000 plus tax"              → taxPercent=0, total=10000, warning="Tax rate not specified — set to 0%. Please update if needed."
-• "Invoice Michael $2,000 excluding tax"        → taxPercent=0, total=2000, warning=""
-• "Invoice John $10,000 no tax"                 → taxPercent=0, total=10000, warning=""
-• "Invoice John $7,500 tax exempt"              → taxPercent=0, total=7500, warning=""
-• "Invoice Emma $2,500 net 30"                  → taxPercent=0, total=2500, paymentTermsDays=30, warning=""
-• "Invoice Liam €15,000 inclusive of VAT"       → taxPercent=0, total=15000, warning="Tax rate not specified — set to 0%. Please update if needed."
+• No tax mentioned at all:
+  → isTaxInclusive=FALSE, taxPercent=0, taxAmount=0, total=subtotal, warning=""
 
 ━━━ CALCULATIONS ━━━
-For TAX-INCLUSIVE invoices (USD/EUR): use values from TAX RULES — do NOT recalculate total.
-For GST-INCLUSIVE invoices (INR): use values from GST RULES — do NOT recalculate total.
-For all other invoices:
-1. subtotal = sum of all lineItem amounts
-2. discountAmount = percent→round(subtotal×val/100) | amount→val | none→0
-3. taxableAmount = subtotal − discountAmount
-4. INR: gstAmount = round(taxableAmount × gstPercent / 100)
-         CGST_SGST: cgst=sgst=round(gstAmount/2), igst=0
-         IGST: igst=gstAmount, cgst=sgst=0
-         total = taxableAmount + gstAmount
-5. USD/EUR: taxAmount = round(taxableAmount × taxPercent / 100)
-            total = taxableAmount + taxAmount
+
+STEP 0 — Set isTaxInclusive (see isTaxInclusive FLAG section above).
+
+For isTaxInclusive=TRUE (back-calculated):
+  • lineItem.amount = round(statedTotal ÷ (1 + taxRate/100))  ← PRE-TAX
+  • subtotal = sum of lineItem amounts
+  • For INR: gstAmount = statedTotal − subtotal
+  • For USD/EUR: taxAmount = statedTotal − subtotal
+  • total = statedTotal EXACTLY — never change it
+  • Do NOT add tax on top again
+
+For isTaxInclusive=FALSE (standard — tax added on top):
+  1. subtotal = sum of all lineItem amounts
+  2. discountAmount = percent→round(subtotal×val/100) | amount→val | none→0
+  3. taxableAmount = subtotal − discountAmount
+  4. INR: gstAmount = round(taxableAmount × gstPercent / 100)
+           CGST_SGST: cgst=sgst=round(gstAmount/2), igst=0
+           IGST: igst=gstAmount, cgst=sgst=0
+           total = taxableAmount + gstAmount
+  5. USD/EUR: taxAmount = round(taxableAmount × taxPercent / 100)
+              total = taxableAmount + taxAmount
 
 ━━━ DATES ━━━
 • No date → invoiceDate=today, invoiceMonth=currentMonth
@@ -205,6 +228,7 @@ MILESTONE — "milestone 1 of 3, total ₹3L/$30,000":
 → lineItems = one item: description="Project Milestone 1 of 3", qty=1, unit="milestone"
 
 ADVANCE → description="Advance Payment — [Project name]", qty=1
+- "Invoice Meera ₹80,000 — 60% advance" → lineItem.amount=80000 (₹80,000 IS the invoice amount, "60% advance" is the description label)
 RETAINER → description="Monthly Retainer", unit="month", qty=1
 
 PRO-RATA — "15 days of April at ₹60,000/month":
@@ -219,6 +243,14 @@ DISCOUNT:
 • default → discountType="none", discountValue=0
 
 HSN/SAC (INR invoices only): 998314=software dev | 998312=web design | 998313=IT consulting | 998315=data processing
+
+━━━ QUICK REFERENCE ━━━
+• "with X% tax/VAT/GST"          → isTaxInclusive=false, ADD tax on top
+• "inclusive/included + X%"      → isTaxInclusive=true, back-calculate
+• "inclusive/included, no rate"  → isTaxInclusive=true, taxAmount=0, warn
+• "no tax / excluding / exempt"  → isTaxInclusive=false, taxAmount=0
+• "plus tax, no rate"            → isTaxInclusive=false, taxAmount=0, warn
+• Discount + tax: discount first, then tax on taxableAmount
 
 ━━━ REQUEST ━━━
 {prompt}`;
@@ -272,8 +304,7 @@ TAX/GST change:
 • INR invoice: update gstPercent/gstType, changedFields=["gstPercent","gstType"]
 • USD invoice: update taxPercent/taxAmount/taxLabel, changedFields=["taxPercent","taxAmount"]
 • EUR invoice: update taxPercent/taxAmount/taxLabel, changedFields=["taxPercent","taxAmount"]
-NOTE on tax change: The editor always ADDS tax on top of subtotal.
-If user wants tax-inclusive pricing (total stays the same), they should create a new invoice with "inclusive" keyword.
+NOTE: The editor always ADDS tax on top of subtotal (isTaxInclusive=false for edits).
 "Set VAT to 18%" on an existing invoice → add 18% on top of current subtotal.
 
 OTHER:
@@ -341,18 +372,19 @@ currency = "{currency}"
 • Do NOT copy from previous invoices in the batch — parse fresh from base request
 • CRITICAL: If base request says "no tax" or has USD/EUR currency with no tax → taxPercent=0, gstPercent=0 for ALL invoices in batch
 • CRITICAL: Do NOT add tax from memory/history — only use tax explicitly stated in base request
+• isTaxInclusive = false for all batch invoices (multi-invoice prompts always state base price)
 
 EXAMPLE (INR):
 Base: "web maintenance ₹15,000/month for 6 months with 18% GST"
-→ currency="INR", gstPercent=18, subtotal=15000, gstAmount=2700, taxPercent=0, taxAmount=0, total=17700
+→ currency="INR", gstPercent=18, subtotal=15000, gstAmount=2700, taxPercent=0, taxAmount=0, total=17700, isTaxInclusive=false
 
 EXAMPLE (USD with tax):
 Base: "web maintenance $2,000/month for 3 months with 10% tax"
-→ currency="USD", gstPercent=0, gstAmount=0, taxPercent=10, taxAmount=200, taxLabel="Tax", subtotal=2000, total=2200
+→ currency="USD", gstPercent=0, gstAmount=0, taxPercent=10, taxAmount=200, taxLabel="Tax", subtotal=2000, total=2200, isTaxInclusive=false
 
 EXAMPLE (USD no tax):
 Base: "web maintenance $2,000/month for 3 months"
-→ currency="USD", gstPercent=0, gstAmount=0, taxPercent=0, taxAmount=0, subtotal=2000, total=2000`;
+→ currency="USD", gstPercent=0, gstAmount=0, taxPercent=0, taxAmount=0, subtotal=2000, total=2000, isTaxInclusive=false`;
 
 export const MULTI_DETECT_PROMPT = `You are detecting if a prompt requests MULTIPLE SEPARATE invoices.
 

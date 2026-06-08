@@ -65,6 +65,11 @@ type PendingStatus =
   | "awaiting_edit_ambiguity"
   | "awaiting_client_name";
 
+type BatchItem = {
+  invoice: ParsedInvoice;
+  matchResult: { type: string; client: ClientAPI | null; score: number };
+};
+
 interface PendingState {
   status: PendingStatus;
   sessionId: string;
@@ -76,6 +81,62 @@ interface PendingState {
   ambiguityTargetRef?: string;
   ambiguitySourceRef?: string;
   pendingEmail?: string;
+  pendingBatch?: BatchItem[];
+}
+
+// ── Detects if a reply while awaiting client details is an invoice override ──
+// e.g. "Add VAT 10%", "give 10% discount", "net 30", "add note: pay via bank"
+function isInvoiceOverride(reply: string): boolean {
+  const r = reply.toLowerCase().trim();
+  return (
+    /\b(vat|tax|gst)\s*\d/.test(r) || // "VAT 10%", "tax 18%", "gst 5%"
+    /add\s+(vat|tax|gst)/.test(r) || // "add VAT 10%"
+    /set\s+(vat|tax|gst)/.test(r) || // "set tax to 18%"
+    /\d+%\s*(vat|tax|gst|off|discount)/.test(r) || // "10% VAT", "5% off"
+    /\b(discount|off)\b/.test(r) || // "give 10% discount"
+    /net\s*\d+/.test(r) || // "net 30"
+    /payment\s*terms/.test(r) || // "payment terms 45 days"
+    /\d+\s*days(\s*(payment|terms))?/.test(r) || // "30 days"
+    /add\s+note/.test(r) || // "add note: ..."
+    /remove\s+\w+/.test(r) // "remove item"
+  );
+}
+
+// Human-readable summary when deterministic override is applied
+function applyOverrideSummary(reply: string, invoice: ParsedInvoice): string {
+  const currency = invoice.currency ?? "INR";
+  const r = reply.toLowerCase();
+  if (/vat|tax|gst/.test(r)) {
+    const rate =
+      currency === "INR" ? invoice.gstPercent : invoice.taxPercent ?? 0;
+    const label =
+      currency === "INR" ? "GST" : currency === "EUR" ? "VAT" : "Tax";
+    const sym = currency === "USD" ? "$" : currency === "EUR" ? "€" : "₹";
+    if (invoice.isTaxInclusive) {
+      return `Got it! ${label} ${rate}% back-calculated from total — subtotal: ${sym}${invoice.subtotal.toLocaleString(
+        "en-IN"
+      )}, ${label}: ${sym}${(
+        invoice.taxAmount ??
+        invoice.gstAmount ??
+        0
+      ).toLocaleString(
+        "en-IN"
+      )}, total stays ${sym}${invoice.total.toLocaleString("en-IN")}`;
+    }
+    return `Updated! ${label} ${rate}% applied → new total: ${sym}${invoice.total.toLocaleString(
+      "en-IN"
+    )}`;
+  }
+  if (/discount|off/.test(r)) {
+    const sym = currency === "USD" ? "$" : currency === "EUR" ? "€" : "₹";
+    return `Discount applied → new total: ${sym}${invoice.total.toLocaleString(
+      "en-IN"
+    )}`;
+  }
+  if (/net|days|terms/.test(r)) {
+    return `Payment terms updated to ${invoice.paymentTermsDays} days.`;
+  }
+  return "Updated invoice.";
 }
 
 export function useInvoiceChat() {
@@ -301,8 +362,6 @@ export function useInvoiceChat() {
       console.error("Failed to save draft:", err);
     }
 
-    // When suppressed, use empty content so no text bubble shows — but message still
-    // exists in DB with invoice attachment so the mini card renders in UI.
     const content = suppressGenericMessage
       ? " "
       : `Invoice draft ready for **${finalInvoice.clientName}**. Review it in the side panel.`;
@@ -320,8 +379,6 @@ export function useInvoiceChat() {
       }
     );
 
-    // Always add to UI so the mini card renders — but only if still on this session.
-    // Empty content = no text bubble shown, just the invoice mini card.
     if (currentSessionIdRef.current === sessionId) {
       setMessages((prev) => [
         ...prev,
@@ -346,7 +403,6 @@ export function useInvoiceChat() {
       invoiceNumber: savedDraft?.invoiceNumber,
     };
 
-    // Only update session invoices and panel if user is still on this session
     if (currentSessionIdRef.current === sessionId) {
       setSessionInvoices((prev) => {
         const updated = [...prev, newInvoice];
@@ -357,12 +413,8 @@ export function useInvoiceChat() {
     }
 
     sessionInvoicesRef.current = [...sessionInvoicesRef.current, newInvoice];
-
     setActiveTab("draft");
 
-    // Always show warning when a confirmed invoice already exists for same client+month.
-    // suppressGenericMessage only hides the "draft ready" text — never the warning.
-    // Multi-invoice batch: individual warnings show inline; consolidated check in multi_created.
     if (
       savedDraft?.hasSimilar &&
       savedDraft.similarInvoiceNumber &&
@@ -374,8 +426,57 @@ export function useInvoiceChat() {
       );
     }
 
-    // Return both savedDraft info and the message ID for reliable batch selection
     return { ...(savedDraft ?? {}), _msgId: savedMsg._id };
+  };
+
+  const saveMultiBatch = async (
+    items: BatchItem[],
+    sessionId: string,
+    originalPrompt: string,
+    resolvedClient?: ClientAPI | null
+  ) => {
+    let firstBatchMessageId: string | null = null;
+
+    for (const { invoice: inv, matchResult } of items) {
+      console.log("💾 saveMultiBatch item:", inv.clientName, inv.total);
+      const client =
+        resolvedClient !== undefined
+          ? resolvedClient
+          : matchResult.type === "exact"
+          ? matchResult.client
+          : null;
+
+      const savedDraft = await saveDraftAndShow(
+        inv,
+        client,
+        sessionId,
+        originalPrompt,
+        false,
+        true
+      );
+
+      if (!firstBatchMessageId && savedDraft?._msgId) {
+        firstBatchMessageId = savedDraft._msgId;
+      }
+    }
+
+    if (firstBatchMessageId && currentSessionIdRef.current === sessionId) {
+      setSelectedPanelMessageId(firstBatchMessageId);
+    } else if (currentSessionIdRef.current === sessionId) {
+      const allNow = sessionInvoicesRef.current;
+      const batchStart = Math.max(0, allNow.length - items.length);
+      const firstOfBatch = allNow[batchStart];
+      if (firstOfBatch) setSelectedPanelMessageId(firstOfBatch.messageId);
+    }
+
+    if (currentSessionIdRef.current === sessionId) {
+      await addAIMessage(
+        `All ${items.length} invoice${
+          items.length !== 1 ? "s" : ""
+        } are ready. Review each one in the side panel.`,
+        sessionId
+      );
+    }
   };
 
   const applyEditAndShow = async (
@@ -396,10 +497,6 @@ export function useInvoiceChat() {
 
     const finalInvoice = recalculateTotals(updatedInvoice);
 
-    // ── Complete ALL async operations first ──
-    // This ensures the DB is fully updated before any React state setters
-    // trigger re-renders that might cause the panel to re-fetch stale data.
-
     if (target.invoiceId) {
       try {
         await updateInvoice(target.invoiceId, finalInvoice);
@@ -417,17 +514,13 @@ export function useInvoiceChat() {
       }
     }
 
-    // ── Now do all state updates together (after DB is updated) ──
     setSessionInvoices((prev) =>
       prev.map((s) =>
         s.messageId === target.messageId ? { ...s, invoice: finalInvoice } : s
       )
     );
 
-    // Setting selectedPanelMessageId here is safe because DB is already updated.
-    // Any re-fetch triggered by this state change will get the correct data.
     setSelectedPanelMessageId(target.messageId);
-
     await addAIMessage(message, sessionId);
   };
 
@@ -510,37 +603,53 @@ export function useInvoiceChat() {
           await addAIMessage(message, sessionId);
           break;
         }
+
+        // ── Find matching invoice in session ──
         let matches = findMatchingInvoices(
           sessionInvoicesRef.current,
           targetRef ?? ""
         );
-        // If no matches by targetRef, fall back to panel-selected or most recent draft
+
         if (matches.length === 0) {
           const drafts = sessionInvoicesRef.current.filter(
             (s) => s.status !== "confirmed"
           );
-          if (drafts.length === 1) {
+
+          // Only fall back to a draft when NO specific client/invoice was targeted.
+          // If a specific client (targetRef) was mentioned but not found in session,
+          // do NOT fall back — that would edit the wrong invoice.
+          const hasSpecificTarget = (targetRef ?? "").trim().length > 0;
+
+          if (!hasSpecificTarget && drafts.length === 1) {
             matches = drafts;
-          } else if (selectedPanelMessageId) {
+          } else if (!hasSpecificTarget && selectedPanelMessageId) {
             const panelMatch = sessionInvoicesRef.current.find(
               (s) =>
                 s.messageId === selectedPanelMessageId &&
                 s.status !== "confirmed"
             );
             if (panelMatch) matches = [panelMatch];
-          } else if (drafts.length > 0) {
+          } else if (!hasSpecificTarget && drafts.length > 0) {
             matches = [drafts[drafts.length - 1]];
           }
         }
+
+        // No match found — show not-found message and stop
         if (matches.length === 0) {
-          await addAIMessage(message, sessionId);
+          const notFoundMsg =
+            (targetRef ?? "").trim().length > 0
+              ? `I couldn't find an invoice for **${targetRef}** in this session. Check the side panel or specify an invoice number (e.g. INV-2026-001).`
+              : message;
+          await addAIMessage(notFoundMsg, sessionId);
           break;
         }
+
         if (matches.length === 1) {
           await applyEditAndShow(matches[0], invoice, message, sessionId);
           break;
         }
-        // Multiple matches — filter out confirmed ones first
+
+        // Multiple matches — filter confirmed ones first
         const editableMatches = matches.filter((m) => m.status !== "confirmed");
         if (editableMatches.length === 1) {
           await applyEditAndShow(
@@ -551,6 +660,7 @@ export function useInvoiceChat() {
           );
           break;
         }
+
         // Still ambiguous — ask user
         setPending({
           status: "awaiting_edit_ambiguity",
@@ -584,7 +694,6 @@ export function useInvoiceChat() {
       case "ambiguous": {
         const destinationClientName =
           extractDestinationClientFromPrompt(originalPrompt);
-
         setPending({
           status: "awaiting_ambiguity",
           sessionId,
@@ -599,39 +708,72 @@ export function useInvoiceChat() {
       }
 
       case "multi_created": {
-        await addAIMessage(message, sessionId);
-        const items =
+        const items: BatchItem[] =
           invoicesWithMatch ??
           (invoices ?? []).map((inv) => ({
             invoice: inv,
             matchResult: { type: "none" as const, client: null, score: 0 },
           }));
 
-        let firstBatchMessageId: string | null = null;
+        const firstUnresolved = items.find(
+          (item) => item.matchResult.type !== "exact"
+        );
 
-        for (const { invoice: inv, matchResult } of items) {
-          const savedDraft = await saveDraftAndShow(
-            inv,
-            matchResult.type === "exact" ? matchResult.client : null,
-            sessionId,
-            originalPrompt,
-            false,
-            true
-          );
+        if (firstUnresolved) {
+          const clientName = firstUnresolved.invoice.clientName;
+          const summaryMessage = message
+            .replace(/\n*Review each invoice in the side panel\.?/i, "")
+            .trimEnd();
 
-          if (!firstBatchMessageId && savedDraft?._msgId) {
-            firstBatchMessageId = savedDraft._msgId;
+          if (isGenericClientName(clientName)) {
+            setPending({
+              status: "awaiting_client_name",
+              sessionId,
+              originalPrompt,
+              invoice: firstUnresolved.invoice,
+              clientName,
+              pendingBatch: items,
+            });
+            await addAIMessage(
+              `${summaryMessage}\n\nWhat's the client's name for these invoices?`,
+              sessionId
+            );
+            break;
           }
+
+          if (firstUnresolved.matchResult.type === "partial") {
+            setPending({
+              status: "awaiting_confirm_same",
+              sessionId,
+              originalPrompt,
+              invoice: firstUnresolved.invoice,
+              clientName,
+              matchedClient: firstUnresolved.matchResult.client ?? null,
+              pendingBatch: items,
+            });
+            await addAIMessage(
+              `${summaryMessage}\n\nI found a saved client named **${firstUnresolved.matchResult.client?.name}**.\nIs **${clientName}** the same client? Reply **same** or **different**.`,
+              sessionId
+            );
+          } else {
+            setPending({
+              status: "awaiting_client_details",
+              sessionId,
+              originalPrompt,
+              invoice: firstUnresolved.invoice,
+              clientName,
+              pendingBatch: items,
+            });
+            await addAIMessage(
+              `${summaryMessage}\n\nPlease share **${clientName}**'s contact details:\n\n**Email** *(required)*\n*(Optional: Address, City, State, Phone, GSTIN)*\n\nOr say **skip**.`,
+              sessionId
+            );
+          }
+          break;
         }
 
-        if (firstBatchMessageId && currentSessionIdRef.current === sessionId) {
-          setSelectedPanelMessageId(firstBatchMessageId);
-        } else if (currentSessionIdRef.current === sessionId) {
-          const allNow = sessionInvoicesRef.current;
-          const batchStart = Math.max(0, allNow.length - items.length);
-          const firstOfBatch = allNow[batchStart];
-          if (firstOfBatch) setSelectedPanelMessageId(firstOfBatch.messageId);
-        }
+        await addAIMessage(message, sessionId);
+        await saveMultiBatch(items, sessionId, originalPrompt);
         break;
       }
 
@@ -726,13 +868,211 @@ export function useInvoiceChat() {
         return candidate;
       }
     }
-
     return undefined;
   }
 
   const handlePendingReply = async (reply: string, sessionId: string) => {
     const current = pendingStateRef.current;
     if (!current || !user) return;
+
+    // ── Invoice override while awaiting client details ──
+    // When user is in awaiting_client_details flow but types an invoice
+    // modification (e.g. "Add VAT 10%", "give 10% discount", "net 30"),
+    // apply it to the pending invoice and re-ask for client details.
+    if (
+      current.status === "awaiting_client_details" &&
+      current.invoice &&
+      isInvoiceOverride(reply)
+    ) {
+      // Try AI edit first
+      const sessionContext = buildSessionContext(sessionInvoicesRef.current);
+      const overrideResult = await parseInvoiceWithAI(
+        reply,
+        user.id,
+        sessionContext,
+        current.invoice,
+        {
+          status: "awaiting_client_details",
+          clientName: current.clientName,
+          invoice: current.invoice,
+          originalPrompt: current.originalPrompt,
+        }
+      );
+
+      // Get updated invoice — from AI edit result OR apply deterministically
+      let updatedInvoice: ParsedInvoice | null =
+        overrideResult.action === "edited" && overrideResult.invoice
+          ? overrideResult.invoice
+          : null;
+
+      // Deterministic fallback: if AI didn't return an edit,
+      // apply common overrides directly so they are never lost
+      if (!updatedInvoice) {
+        const r = reply.toLowerCase().trim();
+        let patched = { ...current.invoice };
+
+        // VAT/Tax/GST rate change: "add 10% VAT", "set tax 18%", "VAT 10%", "20% VAT"
+        const taxMatch =
+          r.match(/(\d+(?:\.\d+)?)\s*%?\s*(vat|tax|gst)/i) ||
+          r.match(/(vat|tax|gst)\s*[a-z\s]*?(\d+(?:\.\d+)?)/i);
+        if (taxMatch) {
+          const rate = parseFloat(taxMatch[1] ?? taxMatch[2]);
+          if (!isNaN(rate)) {
+            const currency = patched.currency ?? "INR";
+            // wasInclusive = true only if invoice was explicitly inclusive WITH a warning
+            // (meaning isTaxInclusive=true AND no rate was set yet).
+            // If isTaxInclusive=true but taxPercent/gstPercent already has a value,
+            // the rate was already known — this is a rate-change edit, not an initial clarification.
+            // If isTaxInclusive=false, always add-on.
+            const inv = current.invoice!;
+            const existingRate =
+              currency === "INR" ? inv.gstPercent ?? 0 : inv.taxPercent ?? 0;
+            // Only back-calculate if invoice was marked inclusive AND no rate set yet
+            const wasInclusive =
+              inv.isTaxInclusive === true && existingRate === 0;
+            console.log("🔍 Override tax check:", {
+              isTaxInclusive: inv.isTaxInclusive,
+              existingRate,
+              wasInclusive,
+              rate,
+              currency,
+              total: inv.total,
+            });
+
+            if (currency === "INR") {
+              if (wasInclusive) {
+                // Back-calculate: total stays the same, find pre-tax subtotal
+                const statedTotal = current.invoice!.total;
+                const preTax = Math.round((statedTotal * 100) / (100 + rate));
+                const gstAmount = statedTotal - preTax;
+                patched = {
+                  ...patched,
+                  gstPercent: rate,
+                  isTaxInclusive: true,
+                  lineItems: [
+                    { ...patched.lineItems[0], amount: preTax, rate: preTax },
+                  ],
+                  subtotal: preTax,
+                  taxableAmount: preTax,
+                  gstAmount,
+                  cgstAmount: Math.round(gstAmount / 2),
+                  sgstAmount: gstAmount - Math.round(gstAmount / 2),
+                  igstAmount: 0,
+                  total: statedTotal,
+                };
+                return; // skip recalculateTotals — values already correct
+              } else {
+                patched = { ...patched, gstPercent: rate };
+              }
+            } else {
+              if (wasInclusive) {
+                // Back-calculate: total stays the same
+                const statedTotal = current.invoice!.total;
+                const preTax = Math.round((statedTotal * 100) / (100 + rate));
+                const taxAmount = statedTotal - preTax;
+                patched = {
+                  ...patched,
+                  taxPercent: rate,
+                  taxLabel: currency === "EUR" ? "VAT" : "Tax",
+                  isTaxInclusive: true,
+                  lineItems: [
+                    { ...patched.lineItems[0], amount: preTax, rate: preTax },
+                  ],
+                  subtotal: preTax,
+                  taxableAmount: preTax,
+                  taxAmount,
+                  total: statedTotal,
+                };
+                updatedInvoice = patched as ParsedInvoice;
+                // Skip the recalculateTotals below — already computed
+                const editMsg = applyOverrideSummary(reply, updatedInvoice);
+                setPending({
+                  ...current,
+                  invoice: updatedInvoice,
+                  pendingBatch: current.pendingBatch
+                    ? current.pendingBatch.map((item) => ({
+                        ...item,
+                        invoice:
+                          item.invoice.clientName === current.clientName
+                            ? { ...item.invoice, ...updatedInvoice! }
+                            : item.invoice,
+                      }))
+                    : current.pendingBatch,
+                });
+                await addAIMessage(
+                  `${editMsg}
+
+Please share **${current.clientName}**'s contact details:
+
+**Email** *(required)*
+*(Optional: Address, City, State, Phone, GSTIN)*
+
+Or type **skip** to continue without details.`,
+                  sessionId
+                );
+                return;
+              } else {
+                patched = {
+                  ...patched,
+                  taxPercent: rate,
+                  taxLabel: currency === "EUR" ? "VAT" : "Tax",
+                };
+              }
+            }
+          }
+        }
+
+        // Discount: "10% discount", "give 10% off"
+        const discountMatch = r.match(/(\d+(?:\.\d+)?)\s*%\s*(off|discount)/i);
+        if (discountMatch) {
+          const val = parseFloat(discountMatch[1]);
+          if (!isNaN(val)) {
+            patched = {
+              ...patched,
+              discountType: "percent",
+              discountValue: val,
+            };
+          }
+        }
+
+        // Payment terms: "net 30", "30 days"
+        const termsMatch =
+          r.match(/(?:net\s*|payment\s*terms?\s*)(\d+)/i) ||
+          r.match(/(\d+)\s*days/i);
+        if (termsMatch) {
+          const days = parseInt(termsMatch[1]);
+          if (!isNaN(days)) {
+            patched = { ...patched, paymentTermsDays: days };
+          }
+        }
+
+        updatedInvoice = recalculateTotals(patched);
+      }
+
+      const editMessage =
+        overrideResult.action === "edited"
+          ? overrideResult.message
+          : applyOverrideSummary(reply, updatedInvoice!);
+
+      setPending({
+        ...current,
+        invoice: updatedInvoice!,
+        pendingBatch: current.pendingBatch
+          ? current.pendingBatch.map((item) => ({
+              ...item,
+              invoice:
+                item.invoice.clientName === current.clientName
+                  ? { ...item.invoice, ...updatedInvoice! }
+                  : item.invoice,
+            }))
+          : current.pendingBatch,
+      });
+      await addAIMessage(
+        `${editMessage}\n\nPlease share **${current.clientName}**'s contact details:\n\n**Email** *(required)*\n*(Optional: Address, City, State, Phone, GSTIN)*\n\nOr type **skip** to continue without details.`,
+        sessionId
+      );
+      return;
+    }
 
     const sessionContext = buildSessionContext(sessionInvoicesRef.current);
 
@@ -757,7 +1097,6 @@ export function useInvoiceChat() {
         return;
       }
       if (result.action === "needs_client") {
-        // Copier ran successfully but needs client details for the destination
         setPending({
           ...current,
           status: "awaiting_client_details",
@@ -768,7 +1107,6 @@ export function useInvoiceChat() {
         return;
       }
       if (result.action === "ambiguous") {
-        // Still ambiguous (shouldn't happen after INV ref, but handle gracefully)
         await addAIMessage(result.message, sessionId);
         return;
       }
@@ -778,12 +1116,27 @@ export function useInvoiceChat() {
       }
     }
 
-    // ── Backend wants to parse contact details (email/phone/address) ──
+    const remapBatchNames = (
+      batch: BatchItem[],
+      name: string,
+      onlyClient?: string
+    ): BatchItem[] =>
+      batch.map((item) => ({
+        ...item,
+        invoice: {
+          ...item.invoice,
+          clientName:
+            !onlyClient || item.invoice.clientName === onlyClient
+              ? name
+              : item.invoice.clientName,
+        },
+      }));
     if (
       result.action === "needs_client" &&
       result.message === "_parse_client_details_"
     ) {
       const rawDetails = result.rawClientDetails || reply;
+      const resolvedName = current.clientName ?? "";
       try {
         const parsed = await parseClientDetailsFromText(
           user.id,
@@ -793,60 +1146,136 @@ export function useInvoiceChat() {
         setPending(null);
         await addAIMessage(
           parsed?.client
-            ? `Saved **${current.clientName}**'s details ✓ Creating invoice now!`
-            : `Creating invoice! You can add client details later.`,
+            ? `Saved **${current.clientName}**'s details ✓ Creating invoice${
+                current.pendingBatch ? "s" : ""
+              } now!`
+            : `Creating invoice${
+                current.pendingBatch ? "s" : ""
+              }! You can add client details later.`,
           sessionId
         );
-        await saveDraftAndShow(
-          current.invoice!,
-          parsed?.client ?? null,
-          sessionId,
-          current.originalPrompt,
-          true,
-          true
-        );
+        if (current.pendingBatch) {
+          const namedBatch = resolvedName
+            ? remapBatchNames(
+                current.pendingBatch,
+                resolvedName,
+                current.clientName
+              )
+            : current.pendingBatch;
+          await saveMultiBatch(
+            namedBatch,
+            sessionId,
+            current.originalPrompt,
+            parsed?.client ?? null
+          );
+        } else {
+          await saveDraftAndShow(
+            current.invoice!,
+            parsed?.client ?? null,
+            sessionId,
+            current.originalPrompt,
+            true,
+            true
+          );
+        }
         return;
       } catch {
         setPending(null);
-        await addAIMessage(`Creating invoice now!`, sessionId);
-        await saveDraftAndShow(
-          current.invoice!,
-          null,
-          sessionId,
-          current.originalPrompt,
-          true,
-          true
+        await addAIMessage(
+          `Creating invoice${current.pendingBatch ? "s" : ""} now!`,
+          sessionId
         );
+        if (current.pendingBatch) {
+          const namedBatch = resolvedName
+            ? remapBatchNames(
+                current.pendingBatch,
+                resolvedName,
+                current.clientName
+              )
+            : current.pendingBatch;
+          await saveMultiBatch(
+            namedBatch,
+            sessionId,
+            current.originalPrompt,
+            null
+          );
+        } else {
+          await saveDraftAndShow(
+            current.invoice!,
+            null,
+            sessionId,
+            current.originalPrompt,
+            true,
+            true
+          );
+        }
         return;
       }
     }
 
-    // ── Backend says needs_client with a new/corrected name — update pending ──
     if (result.action === "needs_client" && result.pendingClientName) {
+      const newName = result.pendingClientName;
       setPending({
         ...current,
         status: "awaiting_client_details",
-        clientName: result.pendingClientName,
-        invoice: result.invoice || current.invoice,
+        clientName: newName,
+        invoice: result.invoice
+          ? { ...result.invoice, clientName: newName }
+          : current.invoice
+          ? { ...current.invoice, clientName: newName }
+          : current.invoice,
+        pendingBatch: current.pendingBatch
+          ? remapBatchNames(current.pendingBatch, newName, current.clientName)
+          : current.pendingBatch,
       });
       await addAIMessage(result.message, sessionId);
       return;
     }
 
-    // ── Backend says needs_client (stay in flow — different client, etc.) ──
     if (result.action === "needs_client") {
+      const newName = result.invoice?.clientName || current.clientName;
       setPending({
         ...current,
         status: "awaiting_client_details",
-        clientName: result.invoice?.clientName || current.clientName,
+        clientName: newName,
         invoice: result.invoice || current.invoice,
+        pendingBatch:
+          current.pendingBatch && newName
+            ? remapBatchNames(current.pendingBatch, newName, current.clientName)
+            : current.pendingBatch,
       });
       await addAIMessage(result.message, sessionId);
       return;
     }
 
-    // ── Resolved — clear pending and handle normally ──
     setPending(null);
+
+    if (
+      current.pendingBatch &&
+      (result.action === "created" || result.action === "copied")
+    ) {
+      const resolvedClient = result.matchResult?.client ?? null;
+      const resolvedName =
+        result.invoice?.clientName ||
+        result.matchResult?.client?.name ||
+        current.clientName;
+      const updatedBatch = resolvedName
+        ? remapBatchNames(
+            current.pendingBatch,
+            resolvedName,
+            current.clientName
+          )
+        : current.pendingBatch;
+      await addAIMessage(result.message, sessionId);
+      await saveMultiBatch(
+        updatedBatch,
+        sessionId,
+        current.originalPrompt,
+        resolvedClient
+      );
+      return;
+    }
+
     await handleAgentResult(result, sessionId, current.originalPrompt);
   };
 
@@ -879,16 +1308,13 @@ export function useInvoiceChat() {
       }
 
       if (pendingStateRef.current) {
-        // ── If new prompt looks like a fresh invoice while awaiting client details,
-        //    auto-dismiss the pending state and treat as a new invoice ──
         const looksLikeNewInvoice =
           /\b(invoice|bill|create)\b/i.test(prompt) &&
           /[$€₹]|\d/.test(prompt) &&
           pendingStateRef.current.status === "awaiting_client_details";
 
         if (looksLikeNewInvoice) {
-          setPending(null); // dismiss current pending state silently
-          // fall through to normal invoice creation below
+          setPending(null);
         } else {
           await handlePendingReply(prompt, sessionId);
           loadSessions();
@@ -896,9 +1322,7 @@ export function useInvoiceChat() {
         }
       }
 
-      //  pass sessionContext and let backend figure out everything ──
       const sessionContext = buildSessionContext(sessionInvoicesRef.current);
-
       const result = await parseInvoiceWithAI(prompt, user.id, sessionContext);
       await handleAgentResult(result, sessionId, prompt);
       loadSessions();
@@ -1081,7 +1505,6 @@ export function useInvoiceChat() {
     if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
   };
 
-  // True only when the CURRENT session is processing a request
   const isCurrentSessionLoading =
     isLoading && loadingSessionId === currentSessionId;
 

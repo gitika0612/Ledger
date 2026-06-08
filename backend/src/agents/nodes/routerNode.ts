@@ -14,6 +14,111 @@ const routerSchema = z.object({
 export async function routerNode(
   state: InvoiceAgentState
 ): Promise<Partial<InvoiceAgentState>> {
+  // ── Pre-check 1: "Invoice/Bill [Name] ..." is ALWAYS new ──
+  // Prevents LLM from misclassifying new invoices as edits when client exists in session.
+  const startsWithInvoice = /^(invoice|bill)\s+[a-z]/i.test(
+    state.prompt.trim()
+  );
+  const hasCopySignal =
+    /\b(same|copy|again|repeat|duplicate|last month|next month)\b/i.test(
+      state.prompt
+    );
+  const hasEditSignal =
+    /\b(add|remove|replace|change|update|set|apply|delete|swap|edit|modify|increase|decrease)\b/i.test(
+      state.prompt
+    );
+
+  const hasMultiSignal =
+    /\bfor\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december)/i.test(
+      state.prompt
+    ) ||
+    /\bfor\s+\d+\s+months?\b/i.test(state.prompt) ||
+    /\bmonthly\s+for\b/i.test(state.prompt) ||
+    /\b(q1|q2|q3|q4)\b/i.test(state.prompt) ||
+    /[₹$€][\d,]+.*\band\b.*[₹$€][\d,]+/i.test(state.prompt);
+
+  if (
+    startsWithInvoice &&
+    !hasCopySignal &&
+    !hasEditSignal &&
+    !hasMultiSignal
+  ) {
+    console.log("🔀 Router pre-check: ALWAYS new →", state.prompt.slice(0, 60));
+    return {
+      intent: "new",
+      isMultiple: false,
+      isSplit: false,
+      splitCount: 1,
+      targetRef: "",
+      routerNotes: "deterministic: starts with Invoice/Bill pattern",
+    };
+  }
+
+  // ── Pre-check 2: Copy signals ──
+  // "Copy ...", "Same invoice as ...", "Same as last ...", "Repeat last ..."
+  const isCopySignal =
+    /^copy\s/i.test(state.prompt.trim()) ||
+    /\bsame\s+(invoice|as)\b/i.test(state.prompt) ||
+    /\brepeat\s+(last|previous)\b/i.test(state.prompt) ||
+    /\bsame\s+wala\b/i.test(state.prompt) ||
+    /\bpichle\s+mahine\b/i.test(state.prompt);
+
+  if (isCopySignal) {
+    // Extract source (targetRef) from prompt
+    // "Copy Rahul's invoice for Priya" → targetRef="Rahul"
+    // "Copy last invoice for John" → targetRef="last"
+    // "Same invoice as Priya but for Kartik" → targetRef="Priya"
+    const sourceMatch =
+      state.prompt.match(/copy\s+(?:last\s+invoice|(\w+)'s\s+invoice)/i) ||
+      state.prompt.match(/same\s+(?:invoice\s+)?as\s+(\w+)/i) ||
+      state.prompt.match(/same\s+as\s+(\w+)'s/i) ||
+      state.prompt.match(/repeat\s+(\w+)'s/i);
+
+    const STOP_WORDS = new Set([
+      "last",
+      "the",
+      "a",
+      "an",
+      "my",
+      "this",
+      "that",
+      "invoice",
+      "same",
+      "as",
+      "wala",
+      "pichle",
+      "mahine",
+    ]);
+    const rawRef = sourceMatch?.[1]?.trim() ?? "";
+    const targetRef =
+      rawRef && !STOP_WORDS.has(rawRef.toLowerCase()) ? rawRef : "last";
+
+    // Also extract destination client directly from "Copy X's invoice for Y"
+    // Pass it via routerNotes so copierNode can use it if needed
+    const destMatch = state.prompt.match(
+      /copy\s+(?:last\s+)?(?:\w+'s\s+)?invoice\s+for\s+([A-Za-z]+)/i
+    );
+    const destClient = destMatch?.[1] ?? "";
+
+    console.log(
+      "🔀 Router pre-check: ALWAYS copy →",
+      state.prompt.slice(0, 60),
+      "targetRef:",
+      targetRef
+    );
+    return {
+      intent: "copy",
+      isMultiple: false,
+      isSplit: false,
+      splitCount: 1,
+      targetRef,
+      routerNotes: destClient
+        ? `dest:${destClient}`
+        : "deterministic: copy signal detected",
+    };
+  }
+
+  // ── LLM routing for everything else ──
   const model = new ChatOpenAI({
     modelName: "gpt-4o-mini",
     temperature: 0,
@@ -58,6 +163,8 @@ ROUTING RULES — read carefully:
   - Percentage split like "40% X, 60% Y" is ALWAYS "new" with multiple line items in ONE invoice
   - CRITICAL: If a prompt has an amount + percentage breakdown (e.g. "₹1,00,000 — 40% X, 60% Y"), it is ALWAYS "new". Never "multi". Never "split".
   - CRITICAL: If the prompt contains a client name + amount/service description with NO edit keywords and NO copy keywords, it is ALWAYS "new".
+  - CRITICAL: "Invoice [Name] [amount] net X" / "Invoice [Name] [amount] net 30" → ALWAYS "new" — the "net X" is the payment terms FOR THE NEW INVOICE, not an edit instruction. A prompt that starts with "Invoice [Name] [amount]" is ALWAYS "new" regardless of what follows.
+  - CRITICAL: Any prompt matching "Invoice/Bill [ClientName] [currency amount]" pattern = ALWAYS "new", even if it also mentions GST%, payment terms, or discount.
 
 "edit" = modify an EXISTING invoice in session. Use when the user wants to change something about an invoice they already created.
 
@@ -82,6 +189,18 @@ Natural language edit patterns (NO standard keyword needed — classify as edit 
 
 CRITICAL RULE FOR EDIT: If the session has existing invoices AND the prompt is about modifying tax / GST / VAT / discount / payment terms / a line item — it is ALWAYS "edit", even without standard keywords.
 
+DISCOUNT RULE (very important): Any prompt containing "percent off", "% off", "discount", "% discount" with NO client name and NO new amount being invoiced → ALWAYS "edit". These are NEVER new invoices.
+  - "give 10 percent off" → edit ← NO client name, NO invoice amount → ALWAYS edit
+  - "10 percent off" → edit
+  - "give me 15% off" → edit
+  - "apply 5 percent discount" → edit
+  - "10% off please" → edit
+
+PAYMENT TERMS RULE: Any prompt that ONLY changes payment terms with no client/amount → ALWAYS "edit":
+  - "make payment terms 30 days" → edit
+  - "change to net 45" → edit
+  - "net 30 please" → edit
+
 Examples:
   - "add hosting fees to last invoice" → edit
   - "add GST to INV-2026-001" → edit
@@ -92,7 +211,9 @@ Examples:
   - "no more tax" → edit (remove tax from last invoice)
   - "get rid of gst" → edit
   - "take off the gst" → edit
-  - "give 10 percent off" → edit (apply 10% discount)
+  - "give 10 percent off" → edit (NEVER new — no client, no amount)
+  - "10 percent off" → edit
+  - "give me 15% discount" → edit
   - "make payment terms 45 days" → edit
   - "turn off gst" → edit
   - "can you remove the brand strategy" → edit
@@ -105,7 +226,10 @@ Examples:
   IMPORTANT: Any prompt starting with "credit note" → ALWAYS "new"
   IMPORTANT: "Invoice Priya again for ₹50,000" → "new"
   IMPORTANT: "Bill Rahul for logo design" → "new"
+  IMPORTANT: "Invoice [Name] [amount] net X" → ALWAYS "new" — never "edit"
+  IMPORTANT: "Invoice Ankit ₹45,000 net 30" → "new" (net 30 is payment terms for the new invoice)
   KEY RULE: if prompt has modification intent + existing invoice reference (explicit OR implied by session) → ALWAYS "edit"
+  KEY RULE: if prompt has ONLY a discount/tax/terms change and NO client name + amount → ALWAYS "edit"
 
 "copy" = duplicate existing invoice for a DIFFERENT client OR different month. Use when:
   - "same invoice as [client]'s" → copy, targetRef = that client
@@ -119,9 +243,6 @@ Examples:
   - "same work for [client] but this month" → copy, targetRef = that client
   - "same invoice for next month" → copy, targetRef = "last"
   - "repeat last invoice for June" → copy, targetRef = "last"
-  - "usi tarah ka invoice [client] ke liye" → copy (Hinglish: same type invoice for client)
-  - "same wala for [client]" → copy (Hinglish)
-  - "pichle mahine wala [client] ke liye" → copy (Hinglish: last month's for client)
   - targetRef = SOURCE client name or invoice number (the one being copied FROM)
   CRITICAL: "Create same invoice as X's but for Y" starts with "Create" but is ALWAYS "copy" NOT "new"
   CRITICAL: Any phrase containing "same invoice as [client]" or "same as [client]'s" = ALWAYS "copy"
@@ -164,7 +285,10 @@ DISAMBIGUATION EXAMPLES:
 "Take off the gst" → edit
 "Turn off gst" → edit
 "Zero gst please" → edit
-"Give 10 percent off" → edit (apply discount)
+"Give 10 percent off" → edit (apply discount — NEVER new, no client or amount)
+"10 percent off" → edit
+"Give me 15% discount" → edit
+"Give 20% off" → edit
 "Make payment terms 45 days" → edit
 "Bump up gst to 18%" → edit
 "Can you remove the brand strategy" → edit
@@ -175,6 +299,9 @@ DISAMBIGUATION EXAMPLES:
 "Same invoice as last one but for Ankit" → copy, targetRef="last"
 "Copy Rahul's invoice for Priya" → copy, targetRef="Rahul"
 "Invoice Priya again for ₹50,000 no GST" → new
+"Invoice Ankit ₹45,000 net 30" → new (net 30 = payment terms for new invoice, NOT edit)
+"Invoice Rahul ₹30,000 net 45 no GST" → new
+"Invoice Meera $5,000 net 15" → new
 "Create same invoice as Priya's but for Kartik with no GST" → copy, targetRef="Priya"
 "Make same invoice as Rahul's for Meera" → copy, targetRef="Rahul"
 "Same as Priya's invoice but for Kartik" → copy, targetRef="Priya"

@@ -36,6 +36,7 @@ export interface IInvoiceDocument extends Document {
   subtotal: number;
   taxableAmount: number;
   total: number;
+  isTaxInclusive?: boolean;
   status: "draft" | "confirmed" | "sent" | "paid" | "overdue";
   createdVia: "chat" | "template" | "memory";
   originalPrompt?: string;
@@ -99,6 +100,8 @@ const invoiceSchema = new Schema<IInvoiceDocument>(
     subtotal: { type: Number, required: true },
     taxableAmount: { type: Number, default: 0 },
     total: { type: Number, required: true },
+    // ── Tax-inclusive flag ──
+    isTaxInclusive: { type: Boolean, default: false },
     status: {
       type: String,
       enum: ["draft", "confirmed", "sent", "paid", "overdue"],

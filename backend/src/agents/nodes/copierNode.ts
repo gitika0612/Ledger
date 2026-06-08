@@ -377,6 +377,11 @@ function extractDestinationClient(prompt: string): string | null {
   // Try patterns from most specific to least specific.
   // Each pattern captures the FINAL word after all qualifiers are consumed.
   const specificPatterns: RegExp[] = [
+    // "Copy last invoice for John" / "Copy Noah's invoice for Sarah with no VAT"
+    /copy\s+(?:last\s+)?(?:\w+'s\s+)?invoice\s+for\s+([A-Za-z]+)/i,
+
+    /(?:same|copy)\s+invoice\s+for\s+([A-Za-z]+)\b/i,
+
     // "but for X" — most reliable signal of destination
     /but\s+for\s+(?:(?:a\s+)?new\s+)?(?:client\s+)?(?:named\s+)?([A-Za-z]+)\s*$/i,
     /but\s+for\s+(?:(?:a\s+)?new\s+)?(?:client\s+)?(?:named\s+)?([A-Za-z]+)/i,

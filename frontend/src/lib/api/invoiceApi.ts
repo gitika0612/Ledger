@@ -117,6 +117,7 @@ export async function saveDraftInvoice(
     subtotal: invoice.subtotal,
     taxableAmount: invoice.taxableAmount || invoice.subtotal,
     total: invoice.total,
+    isTaxInclusive: invoice.isTaxInclusive || false,
     originalPrompt,
     invoiceDate: invoice.invoiceDate,
     invoiceMonth: invoice.invoiceMonth,

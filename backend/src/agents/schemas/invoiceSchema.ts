@@ -50,6 +50,11 @@ export const invoiceSchema = z.object({
   invoiceMonth: z.string(),
   changedFields: z.array(z.string()),
   warning: z.string(),
+
+  // ── Tax-inclusive flag ──
+  // true  = stated total ALREADY includes tax (back-calculated)
+  // false = tax is ADDED ON TOP of the stated amount (default)
+  isTaxInclusive: z.boolean().default(false),
 });
 
 export const multiInvoiceSchema = z.object({

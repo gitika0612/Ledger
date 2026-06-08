@@ -23,22 +23,18 @@ const FIELD_LABELS: Record<string, string> = {
   notes: "notes",
 };
 
-// ── Only fires for INR invoices ──
 function detectGstChange(
   prompt: string,
   currency: string
 ): { gstPercent: number; gstType?: "CGST_SGST" | "IGST" } | null {
   if (currency !== "INR") return null;
-
   const lower = prompt.toLowerCase();
   const removeGst =
     /\b(remove|no|without|zero|0%)\b.*\bgst\b/.test(lower) ||
     /\bgst.*\b(remove|no|without|zero|0%)\b/.test(lower);
   const addGst = /\b(add|apply|put|include|set)\b.*\bgst\b/.test(lower);
-
   if (removeGst) return { gstPercent: 0 };
   if (!addGst) return null;
-
   const pctMatch = lower.match(
     /(\d+(?:\.\d+)?)\s*%?\s*gst|gst\s*(?:at|of|@|to)?\s*(\d+(?:\.\d+)?)\s*%?/
   );
@@ -49,29 +45,23 @@ function detectGstChange(
   return { gstPercent, gstType };
 }
 
-// ── Detect VAT/Tax change for USD/EUR invoices ──
 function detectTaxChange(
   prompt: string,
   currency: string
 ): { taxPercent: number; taxLabel: string } | null {
   if (currency === "INR") return null;
-
   const lower = prompt.toLowerCase();
   const taxLabel = currency === "EUR" ? "VAT" : "Tax";
-
   const removeTax =
     /\b(remove|no|without|zero|0%)\b.*\b(vat|tax)\b/.test(lower) ||
     /\b(vat|tax)\b.*\b(remove|no|without|zero|0%)\b/.test(lower);
   if (removeTax) return { taxPercent: 0, taxLabel };
-
   const changeTax =
     /\b(add|apply|put|include|set|change|update)\b.*\b(vat|tax)\b/.test(
       lower
     ) ||
     /\b(vat|tax)\b.*\b(add|apply|put|include|set|change|update)\b/.test(lower);
-
   if (!changeTax) return null;
-
   const pctMatch = lower.match(
     /(\d+(?:\.\d+)?)\s*%?\s*(?:vat|tax)|(?:vat|tax)\s*(?:to|at|of|@)?\s*(\d+(?:\.\d+)?)\s*%?/
   );
@@ -79,16 +69,6 @@ function detectTaxChange(
   return { taxPercent, taxLabel };
 }
 
-// ── Extract remove/delete target from prompt ──
-// Returns null when the target is too vague (falls through to LLM instead).
-//
-// Handles:
-//   "remove logo design from last invoice" → "logo design"   ✅
-//   "remove hosting please"                → "hosting"       ✅
-//   "delete hosting wala item"             → "hosting"       ✅ (strips "wala item")
-//   "remove it"                            → null → LLM      ✅
-//   "delete that line item"                → null → LLM      ✅
-//   "remove them all"                      → null → LLM      ✅
 function extractRemoveTarget(prompt: string): string | null {
   const REMOVE_STOP_WORDS = new Set([
     "it",
@@ -100,31 +80,30 @@ function extractRemoveTarget(prompt: string): string | null {
     "all",
     "them all",
   ]);
-
-  // Trailing noise words that are never part of an item name
   const TRAILING_NOISE =
     /\s+(?:please|now|wala\s*item|wala|yeh|woh|line\s+item|item)\s*$/i;
-
   const removeRegex =
     /\b(?:remove|delete)\b\s+(.+?)(?:\s+from|\s+in|\s+please|\s+now|\s*$)/i;
-
   const m = prompt.match(removeRegex);
   if (!m) return null;
-
   let captured = m[1]
     .toLowerCase()
     .trim()
     .replace(/^the\s+/, "");
-
-  // Strip trailing noise (order: longer phrases first)
   captured = captured.replace(TRAILING_NOISE, "").trim();
-
-  // Skip to LLM if target is a vague pronoun or too short
-  if (!captured || captured.length < 2 || REMOVE_STOP_WORDS.has(captured)) {
+  if (!captured || captured.length < 2 || REMOVE_STOP_WORDS.has(captured))
     return null;
-  }
-
   return captured;
+}
+
+// ── Detect late fee: "add X% late fee" ──
+function detectLateFee(prompt: string): number | null {
+  const m =
+    prompt.match(/(\d+(?:\.\d+)?)\s*%\s*late\s*fee/i) ||
+    prompt.match(/late\s*fee\s*(?:of\s*)?(\d+(?:\.\d+)?)\s*%/i) ||
+    prompt.match(/add\s+(\d+(?:\.\d+)?)\s*%\s*late/i);
+  if (m) return parseFloat(m[1]);
+  return null;
 }
 
 function buildEditMessage(
@@ -137,7 +116,6 @@ function buildEditMessage(
     ref && ref !== invoice.clientName
       ? `**${invoice.clientName}**'s invoice (${ref})`
       : `**${invoice.clientName}**'s invoice`;
-
   return [
     `Updated ${nameRef}.`,
     changeParts.filter(Boolean).join(" · "),
@@ -226,9 +204,7 @@ function resolveTargetFromSession(
 ): ParsedInvoice | null {
   const blocks = parseSessionBlocks(sessionContext);
   if (blocks.length === 0) return null;
-
   const lower = targetRef.toLowerCase().trim();
-
   let block: (typeof blocks)[0] | undefined;
   if (lower) {
     block = blocks.find(
@@ -240,7 +216,6 @@ function resolveTargetFromSession(
   }
   if (!block) block = blocks[blocks.length - 1];
   if (!block) return null;
-
   return parseBlockToInvoice(block.raw);
 }
 
@@ -250,7 +225,6 @@ function parseBlockToInvoice(block: string): ParsedInvoice | null {
       /-\s*(.+?)\s*\|\s*Qty:\s*([\d.]+)\s*(.+?)\s*\|\s*Rate:\s*[₹$€]?([\d,]+)\s*\|\s*Amount:\s*[₹$€]?([\d,]+)/g
     ),
   ];
-
   const lineItems = lineItemsMatch.map((m) => ({
     description: m[1].trim(),
     quantity: parseFloat(m[2]),
@@ -277,7 +251,6 @@ function parseBlockToInvoice(block: string): ParsedInvoice | null {
   const termsMatch = block.match(/Payment Terms:\s*(\d+)/i);
   const clientMatch = block.match(/Client:\s*(.+)/i);
   const monthMatch = block.match(/Invoice Month:\s*(.+)/i);
-  // ── Discount — written by buildSessionContext as "Discount: percent 10%" or "Discount: amount 500" ──
   const discountLineMatch = block.match(
     /Discount:\s*(percent|amount)\s+([\d.]+)/i
   );
@@ -292,7 +265,6 @@ function parseBlockToInvoice(block: string): ParsedInvoice | null {
 
   const subtotal = parseInt((subtotalMatch?.[1] ?? "0").replace(/,/g, ""));
   const total = parseInt((totalMatch[1] ?? "0").replace(/,/g, ""));
-  // gstAmount must account for discount: total = (subtotal - discountAmount) + gst
   const discountAmount =
     discountType === "percent"
       ? Math.round((subtotal * discountValue) / 100)
@@ -308,7 +280,6 @@ function parseBlockToInvoice(block: string): ParsedInvoice | null {
       (gstMatch?.[2] ?? "CGST_SGST") === "IGST"
         ? ("IGST" as const)
         : ("CGST_SGST" as const);
-
     return {
       clientName: clientMatch?.[1]?.trim() ?? "Client",
       currency,
@@ -362,7 +333,6 @@ function parseBlockToInvoice(block: string): ParsedInvoice | null {
     const taxLabel = taxLineMatch?.[2] || (currency === "EUR" ? "VAT" : "Tax");
     const taxAmount =
       gstAmount > 0 ? gstAmount : Math.round((subtotal * taxPercent) / 100);
-
     return {
       clientName: clientMatch?.[1]?.trim() ?? "Client",
       currency,
@@ -464,6 +434,7 @@ export async function editorNode(
 
   let existing = state.parsedInvoice;
 
+  // ── Resolve from session context first ──
   if (!existing) {
     existing = resolveTargetFromSession(state.sessionContext, ref);
     if (existing)
@@ -475,22 +446,28 @@ export async function editorNode(
       );
   }
 
-  if (!existing && state.userId && ref) {
+  // ── DB fallback ONLY for explicit invoice numbers (INV-XXXX) ──
+  // Never fall back to DB by client name — that would edit invoices from other sessions.
+  // If user says "edit Rahul's invoice" but Rahul has no invoice in this session → not_found.
+  if (!existing && state.userId && ref && /^INV-/i.test(ref)) {
     existing = await fetchInvoiceFromDB(state.userId, ref);
     if (existing)
       console.log(
-        "✅ Editor: resolved from DB, client:",
-        existing.clientName,
-        "currency:",
-        existing.currency
+        "✅ Editor: resolved from DB by invoice number, client:",
+        existing.clientName
       );
   }
 
   if (!existing) {
+    // Check if a specific client was targeted but not found in session
+    const hasSpecificTarget = ref.length > 0;
+    const notFoundMsg = hasSpecificTarget
+      ? `I couldn't find an invoice for **${ref}** in this session. Check the side panel or try specifying an invoice number (e.g. INV-2026-001).`
+      : `I couldn't find the invoice to edit. Please specify an invoice number (e.g. INV-2026-001) or say "last invoice".`;
     return {
       agentResult: {
         action: "not_found",
-        message: `I couldn't find the invoice to edit. Please specify an invoice number (e.g. INV-2026-001) or say "last invoice".`,
+        message: notFoundMsg,
       },
     };
   }
@@ -546,8 +523,6 @@ export async function editorNode(
   }
 
   // ── Deterministic DISCOUNT ──
-  // Supports: "10% off", "10% discount", "give 10 percent off", "discount of 15%",
-  //           "apply 10 percent discount", "10 percent off"
   const discountPctMatch =
     state.prompt.match(/([0-9]+(?:[.][0-9]+)?)\s*%\s*(?:off|discount)/i) ||
     state.prompt.match(/discount\s+(?:of\s+)?([0-9]+(?:[.][0-9]+)?)\s*%/i) ||
@@ -584,20 +559,52 @@ export async function editorNode(
     }
   }
 
+  // ── Deterministic LATE FEE ──
+  // "add 2% late fee", "add late fee 2%", "2% late fee"
+  const lateFeeRate = detectLateFee(state.prompt);
+  if (lateFeeRate !== null && lateFeeRate > 0) {
+    const feeAmount = Math.round((existing.subtotal * lateFeeRate) / 100);
+    const lateFeeItem = {
+      description: `Late Fee (${lateFeeRate}%)`,
+      quantity: 1,
+      unit: "item",
+      rate: feeAmount,
+      amount: feeAmount,
+      hsnSacCode: "",
+      hsnSacType: "SAC" as const,
+    };
+    const updated = recalculateTotals({
+      ...existing,
+      lineItems: [...existing.lineItems, lateFeeItem],
+    });
+    return {
+      parsedInvoice: updated,
+      agentResult: {
+        action: "edited",
+        message: buildEditMessage(
+          updated,
+          ref,
+          [`Added **Late Fee (${lateFeeRate}%)**`],
+          ""
+        ),
+        invoice: updated,
+        targetRef: ref,
+        changedFields: ["lineItems"],
+      },
+    };
+  }
+
   // ── Deterministic REMOVE ──
-  // extractRemoveTarget returns null for vague pronouns ("it", "that") → falls to LLM
   const removeTarget = extractRemoveTarget(state.prompt);
   if (removeTarget) {
     const remaining = existing.lineItems.filter(
       (item) => !item.description.toLowerCase().includes(removeTarget)
     );
-
     if (remaining.length < existing.lineItems.length) {
       const updated = recalculateTotals({ ...existing, lineItems: remaining });
       const removedItems = existing.lineItems
         .filter((item) => item.description.toLowerCase().includes(removeTarget))
         .map((i) => `**${i.description}**`);
-
       return {
         parsedInvoice: updated,
         agentResult: {
@@ -614,17 +621,14 @@ export async function editorNode(
         },
       };
     }
-    // Target extracted but not found in line items → fall through to LLM
-    // (LLM may do fuzzy matching or identify it differently)
   }
 
-  // ── LLM path — handles everything else ──
+  // ── LLM path ──
   const model = new ChatOpenAI({
     modelName: "gpt-4o-mini",
     temperature: 0,
     openAIApiKey: process.env.OPENAI_API_KEY,
   });
-
   const structured = model.withStructuredOutput(invoiceSchema);
 
   const taxInfo =
@@ -675,15 +679,11 @@ export async function editorNode(
 
   if (changedFields.includes("lineItems")) {
     const promptLower = state.prompt.toLowerCase();
-
     const isDiscountPrompt =
       /\b(add|apply|set|give)\b.*\bdiscount\b/.test(promptLower) ||
       /\bdiscount\b.*\b(add|apply|set)\b/.test(promptLower);
-    if (
-      isDiscountPrompt &&
-      changedFields.includes("lineItems") &&
-      !changedFields.includes("discountType")
-    ) {
+
+    if (isDiscountPrompt && !changedFields.includes("discountType")) {
       if (parsedEdit.discountType && parsedEdit.discountType !== "none") {
         const withDiscount = applyNonLineItemChanges(existing, parsedEdit, [
           "discountType",
@@ -738,7 +738,6 @@ export async function editorNode(
         ...existing,
         lineItems: [...existing.lineItems, ...newItems],
       });
-
       return {
         parsedInvoice: updated,
         agentResult: {
@@ -784,7 +783,6 @@ export async function editorNode(
     const otherChanges = changedFields
       .filter((f) => f !== "lineItems")
       .map((f) => FIELD_LABELS[f] || f);
-
     return {
       parsedInvoice: updated,
       agentResult: {
@@ -810,7 +808,6 @@ export async function editorNode(
     applyNonLineItemChanges(existing, parsedEdit, changedFields)
   );
   const labels = changedFields.map((f) => FIELD_LABELS[f] || f);
-
   return {
     parsedInvoice: updated,
     agentResult: {
