@@ -2,7 +2,7 @@
 
 > Create professional GST-compliant invoices in seconds. Just describe the work — Ledger handles the rest.
 
-**Live demo →** [ledgerbrain.vercel.app](https://ledgerbrain.vercel.app)
+**Live demo →** [ledgerbrain.app](https://ledgerbrain.app)
 
 ---
 
@@ -21,6 +21,7 @@ That's all it takes. Ledger parses the prompt, calculates CGST + SGST, saves Pri
 ## Features
 
 ### AI invoice creation
+
 - Natural language prompts → structured invoices in ~4 seconds
 - Supports: simple invoices, multiple line items, GST variations (0%, 5%, 12%, 18%, 28%), CGST/SGST/IGST, discounts (% or fixed), milestones, advances, retainers, pro-rata billing, credit notes
 - Multi-invoice batch creation ("Invoice Rahul for Jan, Feb, March")
@@ -30,18 +31,22 @@ That's all it takes. Ledger parses the prompt, calculates CGST + SGST, saves Pri
 - Live currency conversion (USD, GBP, EUR, AED, SGD → INR)
 
 ### GST-compliant by default
+
 - Automatic CGST + SGST or IGST based on transaction type
 - GST-inclusive back-calculation ("₹1,18,000 inclusive of 18% GST")
 - HSN/SAC codes per line item
 - All amounts calculated deterministically on the backend — the AI interprets, the math is always correct
 
 ### Client memory
+
 - Client details (email, address, city, state, pincode, GSTIN) saved on first invoice
 - Auto-populated on all future invoices for the same client
 - Fuzzy matching — "Rahul" matches existing "Rahul Sharma" record
 
 ### Invoice lifecycle
+
 `Draft → Confirmed → Sent → Paid`
+
 - In-chat editing via the right panel
 - Download PDF at any stage
 - Send via email directly from the app
@@ -51,15 +56,15 @@ That's all it takes. Ledger parses the prompt, calculates CGST + SGST, saves Pri
 
 ## Tech stack
 
-| Layer | Technology |
-|---|---|
-| Frontend | React, TypeScript, Vite, Tailwind CSS, shadcn/ui |
-| Auth | Clerk |
-| AI agent | LangGraph (LangChain), GPT-4o-mini |
-| Backend | Node.js, Express |
-| Database | MongoDB (Mongoose) |
-| Vector search | MongoDB Atlas embeddings (invoice RAG) |
-| Deployment | Vercel (frontend), Railway (backend) |
+| Layer         | Technology                                       |
+| ------------- | ------------------------------------------------ |
+| Frontend      | React, TypeScript, Vite, Tailwind CSS, shadcn/ui |
+| Auth          | Clerk                                            |
+| AI agent      | LangGraph (LangChain), GPT-4o-mini               |
+| Backend       | Node.js, Express                                 |
+| Database      | MongoDB (Mongoose)                               |
+| Vector search | MongoDB Atlas embeddings (invoice RAG)           |
+| Deployment    | Vercel (frontend), Railway (backend)             |
 
 ---
 
@@ -159,6 +164,7 @@ InvoiceOS/
 ## Getting started
 
 ### Prerequisites
+
 - Node.js 18+
 - MongoDB Atlas account (with Vector Search enabled)
 - OpenAI API key
@@ -180,6 +186,7 @@ cd ../frontend && npm install
 ### Environment variables
 
 **Backend** (`backend/.env`):
+
 ```env
 MONGODB_URI=your_mongodb_connection_string
 OPENAI_API_KEY=your_openai_api_key
@@ -188,6 +195,7 @@ PORT=4000
 ```
 
 **Frontend** (`frontend/.env`):
+
 ```env
 VITE_API_URL=http://localhost:4000/api
 VITE_CLERK_PUBLISHABLE_KEY=your_clerk_publishable_key
