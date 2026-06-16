@@ -143,7 +143,6 @@ function parseBlockToInvoice(block: string): ParsedInvoice | null {
       (gstMatch?.[2] ?? "CGST_SGST") === "IGST"
         ? ("IGST" as const)
         : ("CGST_SGST" as const);
-
     return {
       clientName: clientMatch?.[1]?.trim() ?? "Client",
       currency,
@@ -184,7 +183,6 @@ function parseBlockToInvoice(block: string): ParsedInvoice | null {
     const taxLabel = taxLineMatch?.[2] || (currency === "EUR" ? "VAT" : "Tax");
     const taxAmount =
       gstAmount > 0 ? gstAmount : Math.round((subtotal * taxPercent) / 100);
-
     return {
       clientName: clientMatch?.[1]?.trim() ?? "Client",
       currency,
@@ -216,6 +214,53 @@ function parseBlockToInvoice(block: string): ParsedInvoice | null {
       changedFields: [],
       warning: "",
     } as unknown as ParsedInvoice;
+  }
+}
+
+// ── Fetch most recent invoice for a specific client from DB ──
+async function fetchClientInvoiceFromDB(
+  userId: string,
+  clientName: string
+): Promise<ParsedInvoice | null> {
+  try {
+    const inv = await Invoice.findOne({
+      userId,
+      clientName: { $regex: new RegExp(`^${clientName}$`, "i") },
+    })
+      .sort({ createdAt: -1 })
+      .lean();
+    if (!inv) return null;
+    return {
+      clientName: inv.clientName,
+      lineItems: inv.lineItems,
+      currency: inv.currency ?? "INR",
+      gstPercent: inv.gstPercent,
+      gstType: inv.gstType as "IGST" | "CGST_SGST",
+      paymentTermsDays: inv.paymentTermsDays,
+      subtotal: inv.subtotal,
+      taxableAmount: inv.taxableAmount ?? inv.subtotal,
+      gstAmount: inv.gstAmount,
+      cgstAmount: inv.cgstAmount ?? 0,
+      sgstAmount: inv.sgstAmount ?? 0,
+      igstAmount: inv.igstAmount ?? 0,
+      taxPercent: inv.taxPercent ?? 0,
+      taxAmount: inv.taxAmount ?? 0,
+      taxLabel: inv.taxLabel ?? "",
+      discountType:
+        (inv.discountType as "percent" | "amount" | "none") ?? "none",
+      discountValue: inv.discountValue ?? 0,
+      discountAmount: inv.discountAmount ?? 0,
+      notes: inv.notes ?? "",
+      total: inv.total,
+      invoiceDate: inv.invoiceDate
+        ? new Date(inv.invoiceDate).toISOString().split("T")[0]
+        : new Date().toISOString().split("T")[0],
+      invoiceMonth: inv.invoiceMonth ?? "",
+      changedFields: [],
+      warning: "",
+    } as unknown as ParsedInvoice;
+  } catch {
+    return null;
   }
 }
 
@@ -261,15 +306,11 @@ async function fetchLastConfirmedInvoice(
   }
 }
 
-// ── Parse amount override from prompt for a specific currency ──
-// Supports: ₹50,000 / ₹1L / ₹1lakh / ₹50k / Rs 50000 / $5k / €2000
-// Does NOT support word numbers ("fifty k", "1 lakh" without symbol) — those fall to LLM
 function parseAmountOverride(
   prompt: string,
   currency: "INR" | "USD" | "EUR"
 ): number | null {
   let match: RegExpMatchArray | null = null;
-
   if (currency === "USD") {
     match = prompt.match(
       /\$\s*([\d,]+(?:\.\d+)?(?:k|thousand)?)|USD\s*([\d,]+(?:\.\d+)?(?:k|thousand)?)/i
@@ -279,26 +320,21 @@ function parseAmountOverride(
       /€\s*([\d,]+(?:\.\d+)?(?:k|thousand)?)|EUR\s*([\d,]+(?:\.\d+)?(?:k|thousand)?)/i
     );
   } else {
-    // INR: ₹, Rs, INR — support k, L, lakh suffixes
     match = prompt.match(
       /(?:₹|Rs\.?|INR)\s*([\d,]+(?:\.\d+)?(?:k|L|lakh|thousand)?)/i
     );
   }
-
   if (!match) return null;
   const raw = (match[1] || match[2] || "").replace(/,/g, "").trim();
   if (!raw) return null;
-
   const lower = raw.toLowerCase();
   const num = parseFloat(lower);
   if (isNaN(num)) return null;
-
   if (lower.endsWith("lakh") || lower.endsWith("l")) return num * 100000;
   if (lower.endsWith("thousand") || lower.endsWith("k")) return num * 1000;
   return num;
 }
 
-// ── All month names — used to exclude them from client name extraction ──
 const ALL_MONTHS = new Set([
   "january",
   "february",
@@ -325,17 +361,10 @@ const ALL_MONTHS = new Set([
   "dec",
 ]);
 
-// ── Extract destination client name from the original prompt ──
-// Returns null when no valid destination found (same-client-different-month copy).
-//
-// Handles patterns like:
-//   "same as before for new client meera"   → "meera"
-//   "same invoice but for ankit"            → "ankit"
-//   "copy priya's invoice for kartik"       → "kartik"
-//   "same invoice for meera"                → "meera"
-//   "same invoice but for june"             → null  (month, not a client)
-//   "same invoice as last month for priya but for june" → null (priya is source)
 function extractDestinationClient(prompt: string): string | null {
+  // Strip leading punctuation typos (e.g. ":Same invoice" → "Same invoice")
+  prompt = prompt.replace(/^[^a-zA-Z0-9₹$€]+/, "").trim();
+
   const STOP_WORDS = new Set([
     "invoice",
     "bill",
@@ -374,38 +403,22 @@ function extractDestinationClient(prompt: string): string | null {
     ...Array.from(ALL_MONTHS),
   ]);
 
-  // Try patterns from most specific to least specific.
-  // Each pattern captures the FINAL word after all qualifiers are consumed.
   const specificPatterns: RegExp[] = [
-    // "Copy last invoice for John" / "Copy Noah's invoice for Sarah with no VAT"
     /copy\s+(?:last\s+)?(?:\w+'s\s+)?invoice\s+for\s+([A-Za-z]+)/i,
-
     /(?:same|copy)\s+invoice\s+for\s+([A-Za-z]+)\b/i,
-
-    // "but for X" — most reliable signal of destination
     /but\s+for\s+(?:(?:a\s+)?new\s+)?(?:client\s+)?(?:named\s+)?([A-Za-z]+)\s*$/i,
     /but\s+for\s+(?:(?:a\s+)?new\s+)?(?:client\s+)?(?:named\s+)?([A-Za-z]+)/i,
-
-    // "for new client X" / "for a new client X" / "for a new client named X"
     /for\s+(?:a\s+)?new\s+client\s+(?:named\s+)?([A-Za-z]+)/i,
-
-    // "client named X" / "named X"
     /client\s+(?:named\s+)?([A-Za-z]+)\s*$/i,
     /named\s+([A-Za-z]+)\s*$/i,
-
-    // "for X" at very end of string — last resort
     /for\s+([A-Za-z]+)\s*$/i,
   ];
 
   for (const pattern of specificPatterns) {
     const match = prompt.match(pattern);
     const candidate = match?.[1]?.trim();
-    if (candidate && !STOP_WORDS.has(candidate.toLowerCase())) {
-      return candidate;
-    }
+    if (candidate && !STOP_WORDS.has(candidate.toLowerCase())) return candidate;
   }
-
-  // No valid destination client found — caller should use source client name
   return null;
 }
 
@@ -417,15 +430,12 @@ export async function copierNode(
   console.log("prompt:", state.prompt);
 
   const ref = state.targetRef || "";
-
-  // ── If ref is a specific invoice number (e.g. INV-2026-002), skip ambiguity check ──
   const isInvoiceRef = /^INV-\d{4}-\d+$/i.test(ref);
-
   const hasSession =
     state.sessionContext &&
     state.sessionContext !== "No existing invoices in this session.";
 
-  // ── Multiple matches → ask which one (only when ref is a client name, not an INV number) ──
+  // ── Multiple matches → ask which one ──
   if (
     !isInvoiceRef &&
     ref &&
@@ -456,6 +466,9 @@ export async function copierNode(
   }
 
   const promptLower = state.prompt.toLowerCase();
+  const isAgainPrompt = /^(invoice|bill)\s+\w+\s+again\b/i.test(
+    state.prompt.trim()
+  );
   const isCrossSession =
     !hasSession &&
     (promptLower.includes("same as last") ||
@@ -464,7 +477,8 @@ export async function copierNode(
       promptLower.includes("previous invoice") ||
       promptLower.includes("last month") ||
       promptLower.includes("pichle mahine") ||
-      promptLower.includes("same work"));
+      promptLower.includes("same work") ||
+      isAgainPrompt);
 
   let sourceInv: ParsedInvoice | null = null;
 
@@ -472,7 +486,6 @@ export async function copierNode(
     sourceInv = state.parsedInvoice;
     console.log("✅ Priority 1: using parsedInvoice from state");
   } else if (hasSession) {
-    // When ref is an invoice number, search by ref; otherwise search by client name
     const lookupRef = ref || "last";
     const block = findSourceBlock(state.sessionContext, lookupRef);
     if (block) {
@@ -485,28 +498,59 @@ export async function copierNode(
           sourceInv.currency
         );
     }
+
+    // ── DB fallback by client name ──
+    // Fires when: ref is a specific client name AND not found in session.
+    // Covers "Invoice Priya again" in a new session when Priya has past invoices.
+    if (
+      !sourceInv &&
+      ref &&
+      ref !== "last" &&
+      ref !== "last one" &&
+      !isInvoiceRef &&
+      state.userId
+    ) {
+      sourceInv = await fetchClientInvoiceFromDB(state.userId, ref);
+      if (sourceInv)
+        console.log(
+          "✅ Priority 2b: found client invoice from DB, client:",
+          sourceInv.clientName
+        );
+    }
+
     if (!sourceInv) {
       return {
         agentResult: {
           action: "not_found",
           message:
             ref && ref !== "last"
-              ? `I couldn't find **${ref}** in this session. Please check the invoice number and try again.`
+              ? `I couldn't find any invoice for **${ref}** in this session or your history. Please create one first.`
               : `There are no invoices in this session to copy. Please create an invoice first.`,
         },
       };
     }
   } else if (isCrossSession) {
-    sourceInv = await fetchLastConfirmedInvoice(state.userId);
+    // For "Invoice Priya again" with no session — look up Priya specifically
+    if (isAgainPrompt && ref && ref !== "last" && state.userId) {
+      sourceInv = await fetchClientInvoiceFromDB(state.userId, ref);
+      if (sourceInv)
+        console.log("✅ Priority 3a: last invoice for", ref, "from DB");
+    }
+    if (!sourceInv) {
+      sourceInv = await fetchLastConfirmedInvoice(state.userId);
+      if (sourceInv) console.log("✅ Priority 3b: last confirmed from DB");
+    }
     if (!sourceInv) {
       return {
         agentResult: {
           action: "not_found",
-          message: `I couldn't find any previous invoices to copy. Please create and confirm an invoice first.`,
+          message:
+            ref && ref !== "last"
+              ? `I couldn't find any previous invoice for **${ref}**. Please create and confirm one first.`
+              : `I couldn't find any previous invoices to copy. Please create and confirm an invoice first.`,
         },
       };
     }
-    console.log("✅ Priority 3: last confirmed from DB");
   } else {
     return {
       agentResult: {
@@ -517,17 +561,8 @@ export async function copierNode(
   }
 
   // ── Extract destination client name ──
-  // Three cases:
-  //   1. "same invoice but for Ankit"           → destination = "Ankit"  (different client)
-  //   2. "same invoice as last month for Priya but for June" → destination = null → use source client "Priya"
-  //   3. "same invoice but for June"            → destination = null → use source client
-  //
-  // extractDestinationClient returns null when the only "for X" candidate is a month name,
-  // which signals a same-client-different-month copy.
   const extractedDestination = extractDestinationClient(state.prompt);
-  // Fall back to the source invoice's client name for same-client copies
   const newClientName = extractedDestination ?? sourceInv.clientName;
-
   console.log("✅ Destination client:", newClientName);
 
   // ── Detect currency override in prompt ──
@@ -548,10 +583,8 @@ export async function copierNode(
   const currencyChanged =
     promptCurrency !== null && promptCurrency !== sourceInv.currency;
 
-  // ── Detect amount override in prompt ──
   const amountOverride = parseAmountOverride(state.prompt, currency);
 
-  // ── Apply tax overrides ──
   let gstPercent =
     currencyChanged && currency !== "INR" ? 0 : sourceInv.gstPercent;
   let gstType = sourceInv.gstType ?? "CGST_SGST";
@@ -583,7 +616,6 @@ export async function copierNode(
   if (termOverride) paymentTermsDays = parseInt(termOverride[1]);
   else if (netOverride) paymentTermsDays = parseInt(netOverride[1]);
 
-  // ── Build line items ──
   let lineItems = sourceInv.lineItems;
   if (amountOverride !== null) {
     lineItems = [
@@ -605,8 +637,6 @@ export async function copierNode(
     }));
   }
 
-  // ── Detect month override — supports full names AND abbreviations ──
-  // "same invoice but for June" / "for jun" / "for sept" / "for jan"
   const MONTH_NAMES = [
     "January",
     "February",
@@ -647,6 +677,7 @@ export async function copierNode(
     dec: "December",
     december: "December",
   };
+
   const monthOverrideMatch = state.prompt.match(
     /\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b/i
   );
@@ -667,7 +698,6 @@ export async function copierNode(
     }
   }
 
-  // ── Build copied invoice ──
   const parsedInvoice = recalculateTotals({
     ...sourceInv,
     clientName: newClientName,
@@ -691,7 +721,6 @@ export async function copierNode(
     warning: "",
   });
 
-  // ── Client match ──
   const matchResult = state.userId
     ? await findClientMatch(state.userId, newClientName)
     : { type: "none" as const, client: null, score: 0 };

@@ -284,16 +284,16 @@ function extractStatedBaseAmount(prompt: string): number | null {
   if (allAmounts.length > 1) return null; // let LLM handle multi-item
 
   // Skip per-unit pricing like "₹10,000/day" — LLM calculates total correctly
-  if (/\/\s*(day|hour|hr|month|item|unit|piece|kg)/i.test(prompt)) return null;
+  if (/\/\s*(day|hour|hr|month|item|unit|piece|kg)/i.test(prompt)) return null;
 
   // ₹ with Indian commas
   const m1 = prompt.match(/[₹]([0-9,]+(?:\.[0-9]+)?)/);
   if (m1) return parseInt(m1[1].replace(/,/g, ""));
   // lakh suffix
-  const m2 = prompt.match(/[₹]?([0-9]+(?:\.[0-9]+)?)\s*(?:lakh|L)/i);
+  const m2 = prompt.match(/[₹]?([0-9]+(?:\.[0-9]+)?)\s*(?:lakh|L)/i);
   if (m2) return parseFloat(m2[1]) * 100000;
   // k suffix
-  const m3 = prompt.match(/[₹]?([0-9]+(?:\.[0-9]+)?)\s*k/i);
+  const m3 = prompt.match(/[₹]?([0-9]+(?:\.[0-9]+)?)\s*k/i);
   if (m3) return parseFloat(m3[1]) * 1000;
   // $ or €
   const m4 = prompt.match(/[$€]([0-9,]+(?:\.[0-9]+)?)/);
@@ -334,7 +334,7 @@ function extractTaxRate(prompt: string): number {
 
 // Detect "plus tax" / "ex. tax" — unknown rate, needs warning
 function detectPlusTax(prompt: string): boolean {
-  return /(plus\s+tax|plus\s+vat|ex\.\s*tax|ex\.\s*vat)/i.test(prompt);
+  return /(plus\s+tax|plus\s+vat|ex\.\s*tax|ex\.\s*vat)/i.test(prompt);
 }
 
 function applyTaxCorrection(raw: ParsedInvoice, prompt: string): ParsedInvoice {
@@ -345,7 +345,7 @@ function applyTaxCorrection(raw: ParsedInvoice, prompt: string): ParsedInvoice {
   console.log("🔍 applyTax:", { isInclusive, prompt: prompt.slice(0, 50) });
 
   const isNoTax =
-    /(no\s+vat|no\s+tax|no\s+gst|excluding|excludes|excl\.|tax[\s-]?exempt|tax[\s-]?free|0%\s*(vat|tax|gst)?)/i.test(
+    /(no\s+vat|no\s+tax|no\s+gst|excluding|excludes|excl\.|tax[\s-]?exempt|tax[\s-]?free|0%\s*(vat|tax|gst)?)/i.test(
       prompt
     );
   const isPlusTax = detectPlusTax(prompt);
@@ -495,7 +495,6 @@ function applyTaxCorrection(raw: ParsedInvoice, prompt: string): ParsedInvoice {
   if (!isInclusive && hasRate) {
     // Fix lineItems if LLM back-calculated the amount (treating add-on as inclusive).
     // If single line item and a clear stated amount exists, use it directly.
-    // Fix lineItems if LLM back-calculated the amount (treating add-on as inclusive).
     const statedBase = extractStatedBaseAmount(prompt);
     console.log("🔍 Case5:", {
       statedBase,
@@ -696,6 +695,35 @@ export async function generatorNode(
   // For inclusive invoices where we already computed everything, recalculateTotals
   // only needs to handle discounts and GST splits — it won't touch total.
   const finalInvoice = recalculateTotals(corrected);
+
+  // ── Guard: no amount/price info at all ──
+  // "Bill Rahul for logo design" has a real client + service but NO price anywhere.
+  // GENERATOR_PROMPT defaults missing rates to 0, which would create a useless
+  // ₹0 draft. Neither case should produce a draft — just respond conversationally.
+  const isExplicitlyFree =
+    /\b(free|complimentary|no charge|gratis|pro bono)\b/i.test(state.prompt);
+  const hasZeroAmount =
+    finalInvoice.subtotal === 0 &&
+    finalInvoice.lineItems.every((i) => i.amount === 0 && i.rate === 0);
+
+  if (hasZeroAmount) {
+    if (isExplicitlyFree) {
+      return {
+        agentResult: {
+          action: "info",
+          message: `Got it — since this is complimentary, there's nothing to invoice for **${finalInvoice.clientName}**. No invoice needed! Let me know if you'd like to bill them for something else.`,
+        },
+      };
+    }
+    const serviceDesc =
+      finalInvoice.lineItems[0]?.description?.toLowerCase() || "this work";
+    return {
+      agentResult: {
+        action: "info",
+        message: `I'd be happy to create that invoice for **${finalInvoice.clientName}**! What's the amount or rate for ${serviceDesc}?\n\nTry: "Bill ${finalInvoice.clientName} ₹15,000 for ${serviceDesc}"`,
+      },
+    };
+  }
 
   const matchResult = state.userId
     ? await findClientMatch(state.userId, finalInvoice.clientName)

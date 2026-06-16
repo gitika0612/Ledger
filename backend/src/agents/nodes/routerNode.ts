@@ -3,7 +3,16 @@ import { z } from "zod";
 import { InvoiceAgentState, AgentIntent } from "../state";
 
 const routerSchema = z.object({
-  intent: z.enum(["new", "edit", "copy", "multi", "split", "query", "unclear"]),
+  intent: z.enum([
+    "new",
+    "edit",
+    "copy",
+    "multi",
+    "split",
+    "query",
+    "chat",
+    "unclear",
+  ]),
   isMultiple: z.boolean(),
   targetRef: z.string(),
   clientName: z.string(),
@@ -14,11 +23,71 @@ const routerSchema = z.object({
 export async function routerNode(
   state: InvoiceAgentState
 ): Promise<Partial<InvoiceAgentState>> {
+  // ── Pre-check 0: Obvious greetings, thanks, and help requests ──
+  // Short, conversational messages with no invoice-related content.
+  // "Invoice Priya thanks" or similar would NOT match (too long / has invoice content).
+  const trimmedPrompt = state.prompt.trim();
+  const isGreetingOrThanks =
+    /^(hi|hello|hey|hiya|yo|sup|good morning|good afternoon|good evening)[\s!.,]*$/i.test(
+      trimmedPrompt
+    ) ||
+    /^(thanks?|thank you|thx|ty|cheers|appreciate it|great|awesome|cool|nice|perfect|got it|ok|okay|sounds good)[\s!.,]*$/i.test(
+      trimmedPrompt
+    ) ||
+    /^(what can you do|what do you do|help|how does this work|how do (i|you)|what is|what's the difference)/i.test(
+      trimmedPrompt
+    );
+
+  // ── "Create an invoice" / "I need to bill someone" — bare invoice-creation intent
+  // with NO client name and NO amount anywhere. These should never reach generatorNode
+  // (which would hallucinate numbers from its own prompt examples on empty input).
+  const isBareInvoiceCreationPattern =
+    /^(create|make|generate|let'?s create)\b.*\b(invoice|bill)\b/i.test(
+      trimmedPrompt
+    ) ||
+    /^i (?:want|need) to (?:create|make|generate)\b.*\b(invoice|bill)\b/i.test(
+      trimmedPrompt
+    ) ||
+    /^i (?:want|need) to bill\b/i.test(trimmedPrompt);
+  const hasAnyAmount = /[₹$€]|\d/.test(trimmedPrompt);
+  const hasAnyCapitalizedName = /[A-Z][a-zA-Z]+/.test(
+    trimmedPrompt.replace(/^\w+/, "")
+  ); // exclude first word
+  const isBareInvoiceCreation =
+    isBareInvoiceCreationPattern && !hasAnyAmount && !hasAnyCapitalizedName;
+
+  if (isGreetingOrThanks || isBareInvoiceCreation) {
+    console.log(
+      "🔀 Router pre-check: ALWAYS chat →",
+      trimmedPrompt.slice(0, 60)
+    );
+    return {
+      intent: "chat",
+      isMultiple: false,
+      isSplit: false,
+      splitCount: 1,
+      targetRef: "",
+      routerNotes: "deterministic: greeting/thanks/help pattern",
+    };
+  }
+
   // ── Pre-check 1: "Invoice/Bill [Name] ..." is ALWAYS new ──
   // Prevents LLM from misclassifying new invoices as edits when client exists in session.
   const startsWithInvoice = /^(invoice|bill)\s+[a-z]/i.test(
     state.prompt.trim()
   );
+
+  // ── Does the prompt actually contain invoiceable content? ──
+  // A client name (capitalized word right after Invoice/Bill) OR a currency amount.
+  // "Invoice for the website thing" has neither — it's not a real invoice command,
+  // so it should fall through to the LLM router (→ chat) instead of forcing "new".
+  const verbAndNextWord = state.prompt.trim().match(/^(invoice|bill)\s+(\S+)/i);
+  const hasClientNameAfterVerb = verbAndNextWord
+    ? /^[A-Z][a-zA-Z]*$/.test(verbAndNextWord[2])
+    : false;
+  const hasAmount = /[₹$€]|\d/.test(state.prompt);
+  const hasInvoiceableContent = hasClientNameAfterVerb || hasAmount;
+
   const hasCopySignal =
     /\b(same|copy|again|repeat|duplicate|last month|next month)\b/i.test(
       state.prompt
@@ -27,7 +96,6 @@ export async function routerNode(
     /\b(add|remove|replace|change|update|set|apply|delete|swap|edit|modify|increase|decrease)\b/i.test(
       state.prompt
     );
-
   const hasMultiSignal =
     /\bfor\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december)/i.test(
       state.prompt
@@ -39,6 +107,7 @@ export async function routerNode(
 
   if (
     startsWithInvoice &&
+    hasInvoiceableContent &&
     !hasCopySignal &&
     !hasEditSignal &&
     !hasMultiSignal
@@ -54,25 +123,49 @@ export async function routerNode(
     };
   }
 
-  // ── Pre-check 2: Copy signals ──
+  // ── Pre-check 2: "Invoice Priya again" — smart recency copy ──
+  // "Invoice [Name] again" with NO amount = copy that client's last invoice
+  // "Invoice Priya again for June" = copy Priya's last invoice, change month to June
+  // "Invoice Priya ₹50,000 again" has an amount → NOT this path (falls through to new)
+  const againMatch = state.prompt.match(
+    /^(?:invoice|bill)\s+([A-Za-z]+)\s+again\b/i
+  );
+  const againHasAmount = /[₹$€][\d,]|\d+k\b|\d+\s*lakh/i.test(state.prompt);
+  if (againMatch && !againHasAmount) {
+    const againClient = againMatch[1];
+    console.log(
+      "🔀 Router pre-check: ALWAYS copy (again) →",
+      state.prompt.slice(0, 60),
+      "targetRef:",
+      againClient
+    );
+    return {
+      intent: "copy",
+      isMultiple: false,
+      isSplit: false,
+      splitCount: 1,
+      targetRef: againClient,
+      routerNotes: `again:${againClient}`,
+    };
+  }
+
+  // ── Pre-check 3: Copy signals ──
   // "Copy ...", "Same invoice as ...", "Same as last ...", "Repeat last ..."
+  // Also strip leading punctuation typos (e.g. ":Same invoice" → "Same invoice")
+  const cleanPrompt = state.prompt.replace(/^[^a-zA-Z0-9₹$€]+/, "").trim();
   const isCopySignal =
-    /^copy\s/i.test(state.prompt.trim()) ||
-    /\bsame\s+(invoice|as)\b/i.test(state.prompt) ||
-    /\brepeat\s+(last|previous)\b/i.test(state.prompt) ||
-    /\bsame\s+wala\b/i.test(state.prompt) ||
-    /\bpichle\s+mahine\b/i.test(state.prompt);
+    /^copy\s/i.test(cleanPrompt) ||
+    /\bsame\s+(invoice|as)\b/i.test(cleanPrompt) ||
+    /\brepeat\s+(last|previous)\b/i.test(cleanPrompt) ||
+    /\bsame\s+wala\b/i.test(cleanPrompt) ||
+    /\bpichle\s+mahine\b/i.test(cleanPrompt);
 
   if (isCopySignal) {
-    // Extract source (targetRef) from prompt
-    // "Copy Rahul's invoice for Priya" → targetRef="Rahul"
-    // "Copy last invoice for John" → targetRef="last"
-    // "Same invoice as Priya but for Kartik" → targetRef="Priya"
     const sourceMatch =
-      state.prompt.match(/copy\s+(?:last\s+invoice|(\w+)'s\s+invoice)/i) ||
-      state.prompt.match(/same\s+(?:invoice\s+)?as\s+(\w+)/i) ||
-      state.prompt.match(/same\s+as\s+(\w+)'s/i) ||
-      state.prompt.match(/repeat\s+(\w+)'s/i);
+      cleanPrompt.match(/copy\s+(?:last\s+invoice|(\w+)'s\s+invoice)/i) ||
+      cleanPrompt.match(/same\s+(?:invoice\s+)?as\s+(\w+)/i) ||
+      cleanPrompt.match(/same\s+as\s+(\w+)'s/i) ||
+      cleanPrompt.match(/repeat\s+(\w+)'s/i);
 
     const STOP_WORDS = new Set([
       "last",
@@ -93,9 +186,7 @@ export async function routerNode(
     const targetRef =
       rawRef && !STOP_WORDS.has(rawRef.toLowerCase()) ? rawRef : "last";
 
-    // Also extract destination client directly from "Copy X's invoice for Y"
-    // Pass it via routerNotes so copierNode can use it if needed
-    const destMatch = state.prompt.match(
+    const destMatch = cleanPrompt.match(
       /copy\s+(?:last\s+)?(?:\w+'s\s+)?invoice\s+for\s+([A-Za-z]+)/i
     );
     const destClient = destMatch?.[1] ?? "";
@@ -137,6 +228,18 @@ User prompt: "${state.prompt}"
 
 ROUTING RULES — read carefully:
 
+"chat" = casual conversation, greetings, thanks, or questions ABOUT Ledger/invoicing concepts
+  (NOT about the user's own invoice data — that's "query"). Use when:
+  - "what can you do?" / "what do you do" / "help" → chat
+  - "how do I invoice in USD?" / "how does GST work?" → chat
+  - "what's the difference between CGST and IGST?" → chat
+  - "thanks!" / "thank you" / "cool" / "got it" / "nice" → chat
+  - "hi" / "hello" / "good morning" → chat
+  - Any message that is NOT a command to create/edit/copy/split an invoice,
+    and NOT a question about the user's own invoice data → chat
+  CRITICAL: "what can you do" is chat (about Ledger), but "what's my total billed to Rahul" is query (about user's data)
+  CRITICAL: If the prompt has no client name, no amount, and no invoice-action keyword, and doesn't fit query → chat
+
 "query" = user is ASKING about existing invoices (not creating/editing). Use when:
   - "show me all overdue invoices" → query
   - "which invoices are due this week?" → query
@@ -165,6 +268,7 @@ ROUTING RULES — read carefully:
   - CRITICAL: If the prompt contains a client name + amount/service description with NO edit keywords and NO copy keywords, it is ALWAYS "new".
   - CRITICAL: "Invoice [Name] [amount] net X" / "Invoice [Name] [amount] net 30" → ALWAYS "new" — the "net X" is the payment terms FOR THE NEW INVOICE, not an edit instruction. A prompt that starts with "Invoice [Name] [amount]" is ALWAYS "new" regardless of what follows.
   - CRITICAL: Any prompt matching "Invoice/Bill [ClientName] [currency amount]" pattern = ALWAYS "new", even if it also mentions GST%, payment terms, or discount.
+  - CRITICAL: "Create an invoice" / "make an invoice" / "I want to create an invoice" / "generate invoice" with NO client name AND NO amount/currency anywhere in the prompt → NEVER "new". This is "chat" — ask the user for the missing details. A bare invoice-creation verb with zero specifics is NOT enough to be "new".
 
 "edit" = modify an EXISTING invoice in session. Use when the user wants to change something about an invoice they already created.
 
@@ -332,6 +436,16 @@ DISAMBIGUATION EXAMPLES:
 "Show me all invoices for Priya this year" → query
 "Find all invoices above ₹1,00,000" → query
 "Show clients with outstanding payments" → query
+"What can you do?" → chat
+"How do I invoice in USD?" → chat
+"What's the difference between CGST and IGST?" → chat
+"Thanks!" → chat
+"Hi there" → chat
+"Invoice for the website thing" → chat (no client name, no amount — ask for details)
+"I need to bill someone" → chat (no client name, no amount — ask for details)
+"Create an invoice" → chat (no client name, no amount — ask for details, NEVER "new")
+"Make an invoice for me" → chat (no client name, no amount)
+"I want to bill a client" → chat (no client name, no amount)
 
 Also output:
 - clientName: the DESTINATION client name (e.g. for "copy Rahul's for Priya" → clientName="Priya")

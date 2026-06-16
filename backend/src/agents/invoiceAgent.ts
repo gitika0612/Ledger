@@ -7,6 +7,7 @@ import { copierNode } from "./nodes/copierNode";
 import { multiInvoiceNode } from "./nodes/multiInvoiceNode";
 import { pendingReplyNode } from "./nodes/pendingReplyNode";
 import { queryNode } from "./nodes/queryNode";
+import { chatNode } from "./nodes/chatNode";
 import { IInvoiceDocument } from "../models/Invoice";
 import { ParsedInvoice } from "./schemas/invoiceSchema";
 import {
@@ -104,6 +105,7 @@ function routeFromStart(state: AgentState): string {
 
 function routeAfterRouter(state: AgentState): string {
   if (state.intent === "query") return "query";
+  if (state.intent === "chat" || state.intent === "unclear") return "chat";
   if (state.isMultiple || state.intent === "multi") return "multiInvoice";
   if (state.intent === "edit") return "editor";
   if (state.intent === "copy") return "copier";
@@ -125,12 +127,14 @@ export function createInvoiceAgent() {
     .addNode("multiInvoice", multiInvoiceNode)
     .addNode("pendingReply", pendingReplyNode)
     .addNode("query", queryNode)
+    .addNode("chat", chatNode)
     .addConditionalEdges(START, routeFromStart, {
       pendingReply: "pendingReply",
       router: "router",
     })
     .addConditionalEdges("router", routeAfterRouter, {
       query: "query",
+      chat: "chat",
       rag: "rag",
       editor: "editor",
       copier: "copier",
@@ -145,7 +149,8 @@ export function createInvoiceAgent() {
     .addEdge("editor", END)
     .addEdge("copier", END)
     .addEdge("pendingReply", END)
-    .addEdge("query", END);
+    .addEdge("query", END)
+    .addEdge("chat", END);
 
   return graph.compile();
 }

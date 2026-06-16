@@ -10,6 +10,7 @@ export type AgentIntent =
   | "memory"
   | "split"
   | "query"
+  | "chat"
   | "unclear"
   | null;
 
