@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { isAxiosError } from "axios";
 import {
   Mail,
   Loader2,
@@ -169,12 +170,13 @@ export function SendInvoiceModal({
       setClientEmail(emailToUse.trim());
       setModalState("sent");
       onSent();
-    } catch (err) {
-      console.error("Send failed:", err);
-      const msg =
-        err instanceof Error
-          ? err.message
-          : "Failed to send invoice. Please try again.";
+    } catch (err: unknown) {
+      let msg = "Failed to send invoice. Please try again.";
+      if (isAxiosError<{ message?: string }>(err)) {
+        msg = err.response?.data?.message ?? err.message ?? msg;
+      } else if (err instanceof Error) {
+        msg = err.message;
+      }
       setSendError(msg);
       setModalState(clientEmail ? "ready" : "no_email");
     }

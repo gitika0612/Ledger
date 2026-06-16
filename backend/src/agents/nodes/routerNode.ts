@@ -57,9 +57,9 @@ export async function routerNode(
     isBareInvoiceCreationPattern && !hasAnyAmount && !hasAnyCapitalizedName;
 
   const isQuestionAboutLedger =
-    /^(how (can|do|would|should) i|can i|could i|is it possible to|what if i)\b/i.test(
+    /^(how (can|do|does|would|should) (i|you|we|ledger)|can (i|you|we)|could (i|you|we)|is it possible to|does ledger|will (you|ledger|it)|what if (i|we))\b/i.test(
       trimmedPrompt
-    );
+    ) || /\?\s*$/.test(trimmedPrompt); // ends with "?" — almost always a genuine question, not a command
 
   if (isGreetingOrThanks || isBareInvoiceCreation || isQuestionAboutLedger) {
     console.log(

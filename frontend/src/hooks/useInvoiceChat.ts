@@ -58,6 +58,18 @@ function isGenericClientName(name: string): boolean {
   return GENERIC_CLIENT_NAMES.has(name.toLowerCase().trim());
 }
 
+// ── Statuses that are LOCKED from editing via chat ──
+// Once an invoice has been sent to a client, it's already in their hands —
+// editing it afterward would silently change what they received without
+// their knowledge. Paid/Overdue invoices are even further along the
+// lifecycle and should never be mutated via chat either.
+// Only Draft and Confirmed (not yet sent) remain editable.
+const LOCKED_STATUSES = new Set(["sent", "paid", "overdue"]);
+
+function isLockedStatus(status: string | undefined): boolean {
+  return !!status && LOCKED_STATUSES.has(status);
+}
+
 type PendingStatus =
   | "awaiting_client_details"
   | "awaiting_confirm_same"
@@ -485,11 +497,21 @@ export function useInvoiceChat() {
     message: string,
     sessionId: string
   ) => {
-    if (target.status === "confirmed") {
+    // ── Lock check: Sent / Paid / Overdue invoices cannot be edited via chat ──
+    // Once an invoice has been sent to the client, it's already in their
+    // hands — editing it afterward would silently change what they received.
+    // (Confirmed-but-not-yet-sent invoices ARE still editable.)
+    if (isLockedStatus(target.status)) {
+      const statusLabel =
+        target.status === "sent"
+          ? "already been sent to the client"
+          : target.status === "paid"
+          ? "already been paid"
+          : "passed its due date (overdue)";
       await addAIMessage(
         `⚠️ **${target.invoice.clientName}**'s invoice (${
-          target.invoiceNumber ?? "confirmed"
-        }) is already confirmed and cannot be edited via chat. Go to **All Invoices** to edit it directly.`,
+          target.invoiceNumber ?? target.status
+        }) has ${statusLabel} and can't be edited via chat. Go to **All Invoices** if you need to make a correction there.`,
         sessionId
       );
       return;
@@ -612,7 +634,7 @@ export function useInvoiceChat() {
 
         if (matches.length === 0) {
           const drafts = sessionInvoicesRef.current.filter(
-            (s) => s.status !== "confirmed"
+            (s) => !isLockedStatus(s.status)
           );
 
           // Only fall back to a draft when NO specific client/invoice was targeted.
@@ -626,7 +648,7 @@ export function useInvoiceChat() {
             const panelMatch = sessionInvoicesRef.current.find(
               (s) =>
                 s.messageId === selectedPanelMessageId &&
-                s.status !== "confirmed"
+                !isLockedStatus(s.status)
             );
             if (panelMatch) matches = [panelMatch];
           } else if (!hasSpecificTarget && drafts.length > 0) {
@@ -649,8 +671,10 @@ export function useInvoiceChat() {
           break;
         }
 
-        // Multiple matches — filter confirmed ones first
-        const editableMatches = matches.filter((m) => m.status !== "confirmed");
+        // Multiple matches — filter out locked (sent/paid/overdue) ones first
+        const editableMatches = matches.filter(
+          (m) => !isLockedStatus(m.status)
+        );
         if (editableMatches.length === 1) {
           await applyEditAndShow(
             editableMatches[0],
@@ -677,7 +701,9 @@ export function useInvoiceChat() {
             (m) =>
               `**${m.invoiceNumber ?? "Draft"}** — ${
                 m.invoice.invoiceMonth ?? "unknown"
-              }${m.status === "confirmed" ? " (confirmed — cannot edit)" : ""}`
+              }${
+                isLockedStatus(m.status) ? ` (${m.status} — cannot edit)` : ""
+              }`
           )
           .join("\n");
         await addAIMessage(

@@ -63,19 +63,41 @@ export async function sendInvoice(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    // ── 4. If user provided a new email → upsert into Client record ──
     if (providedEmail?.trim()) {
+      const normalizedEmail = providedEmail.trim().toLowerCase();
+
+      const existingOwner = await Client.findOne({
+        userId: invoice.userId,
+        email: normalizedEmail,
+      }).lean();
+
+      const ownerIsDifferentClient =
+        existingOwner &&
+        existingOwner.name.toLowerCase().trim() !==
+          invoice.clientName.toLowerCase().trim();
+
+      if (ownerIsDifferentClient) {
+        res.status(409).json({
+          error: "email_conflict",
+          message: `This email is already saved for **${existingOwner.name}**. Are **${invoice.clientName}** and **${existingOwner.name}** the same person? If so, update the client name to match before sending — otherwise use a different email for ${invoice.clientName}.`,
+          conflictingClientName: existingOwner.name,
+        });
+        return;
+      }
+
       await Client.findOneAndUpdate(
         {
           userId: invoice.userId,
           name: { $regex: new RegExp(`^${invoice.clientName}$`, "i") },
         },
         {
-          $set: { email: providedEmail.trim().toLowerCase() },
+          $set: { email: normalizedEmail },
           $setOnInsert: { userId: invoice.userId, name: invoice.clientName },
         },
         { upsert: true, new: true }
       );
+
+      clientEmail = normalizedEmail;
     }
 
     // ── 5. Convert base64 → Buffer and send email ──
