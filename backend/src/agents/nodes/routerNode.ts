@@ -56,7 +56,12 @@ export async function routerNode(
   const isBareInvoiceCreation =
     isBareInvoiceCreationPattern && !hasAnyAmount && !hasAnyCapitalizedName;
 
-  if (isGreetingOrThanks || isBareInvoiceCreation) {
+  const isQuestionAboutLedger =
+    /^(how (can|do|would|should) i|can i|could i|is it possible to|what if i)\b/i.test(
+      trimmedPrompt
+    );
+
+  if (isGreetingOrThanks || isBareInvoiceCreation || isQuestionAboutLedger) {
     console.log(
       "🔀 Router pre-check: ALWAYS chat →",
       trimmedPrompt.slice(0, 60)
@@ -299,6 +304,10 @@ DISCOUNT RULE (very important): Any prompt containing "percent off", "% off", "d
   - "give me 15% off" → edit
   - "apply 5 percent discount" → edit
   - "10% off please" → edit
+  EXCEPTION: questions phrased as "how can I...", "can I...", "is it possible to..." are asking HOW Ledger works, not issuing a command → these are "chat", never "edit":
+  - "How can I apply a discount?" → chat
+  - "Can I apply discount" → chat
+  - "Is it possible to give a discount?" → chat
 
 PAYMENT TERMS RULE: Any prompt that ONLY changes payment terms with no client/amount → ALWAYS "edit":
   - "make payment terms 30 days" → edit
