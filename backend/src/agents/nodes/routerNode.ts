@@ -50,11 +50,18 @@ export async function routerNode(
     ) ||
     /^i (?:want|need) to bill\b/i.test(trimmedPrompt);
   const hasAnyAmount = /[₹$€]|\d/.test(trimmedPrompt);
-  const hasAnyCapitalizedName = /[A-Z][a-zA-Z]+/.test(
+  const hasAnyCapitalizedName = /[A-Z][a-zA-Z]+/.test(
     trimmedPrompt.replace(/^\w+/, "")
   ); // exclude first word
+  const hasStructureSignalForBareCheck =
+    /\b(same|copy|but\s+for|repeat|duplicate|add|remove|replace|change|update|set|apply|delete|swap|edit|modify)\b/i.test(
+      trimmedPrompt
+    );
   const isBareInvoiceCreation =
-    isBareInvoiceCreationPattern && !hasAnyAmount && !hasAnyCapitalizedName;
+    isBareInvoiceCreationPattern &&
+    !hasAnyAmount &&
+    !hasAnyCapitalizedName &&
+    !hasStructureSignalForBareCheck;
 
   const isQuestionAboutLedger =
     /^(how (can|do|does|would|should) (i|you|we|ledger)|can (i|you|we)|could (i|you|we)|is it possible to|does ledger|will (you|ledger|it)|what if (i|we))\b/i.test(

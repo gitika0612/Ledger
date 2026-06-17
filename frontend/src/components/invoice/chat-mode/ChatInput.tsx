@@ -1,4 +1,4 @@
-import { useState, KeyboardEvent } from "react";
+import { useState, useRef, useEffect, KeyboardEvent } from "react";
 import { Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -8,6 +8,7 @@ interface ChatInputProps {
   onSend: (message: string) => void;
   isLoading: boolean;
   showSuggestions?: boolean;
+  sessionId?: string | null;
 }
 
 const SUGGESTIONS = [
@@ -20,8 +21,20 @@ export function ChatInput({
   onSend,
   isLoading,
   showSuggestions = false,
+  sessionId,
 }: ChatInputProps) {
   const [input, setInput] = useState("");
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (!isLoading) {
+      textareaRef.current?.focus();
+    }
+  }, [isLoading]);
+
+  useEffect(() => {
+    textareaRef.current?.focus();
+  }, [sessionId]);
 
   const handleSend = () => {
     if (!input.trim() || isLoading) return;
@@ -58,12 +71,14 @@ export function ChatInput({
       <div className="flex items-end gap-3">
         <div className="flex-1 bg-gray-50 border border-gray-200 rounded-2xl px-4 py-3 transition-all">
           <Textarea
+            ref={textareaRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder='Try: "Invoice Priya for 5 days of Next.js at ₹10k/day with 18% GST"'
             rows={1}
             disabled={isLoading}
+            autoFocus={!isLoading}
             className="w-full bg-transparent text-sm text-gray-900 placeholder:text-gray-400 resize-none border-0 focus:border-0 focus:outline-none focus-visible:ring-0 focus-visible:ring-offset-0 p-1 leading-relaxed shadow-none"
             style={{ maxHeight: "120px" }}
           />

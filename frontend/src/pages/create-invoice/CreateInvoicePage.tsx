@@ -107,6 +107,7 @@ export function CreateInvoicePage() {
           onSend={handleSend}
           isLoading={isLoading}
           showSuggestions={messages.length <= 1}
+          sessionId={currentSessionId}
         />
       </div>
 
