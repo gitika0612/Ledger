@@ -334,6 +334,12 @@ Examples:
   - "[client]'s invoice" possessive = ALWAYS edit if there's any modification intent
   - "in last invoice" + any modification = ALWAYS edit
   - "in INV-XXX" + any modification = ALWAYS edit
+
+  CRITICAL targetRef RULE for possessive edits: whenever the prompt names a client via possessive ("[Name]'s invoice"), targetRef MUST be that exact name from the PROMPT TEXT — never substitute a different client name from the session context, even if that other client's invoice is the most recent one in the session. The possessive name in the prompt always wins.
+  - "Add consulting €2,000 to Emma's invoice" → edit, targetRef="Emma" (even if the most recent invoice in session belongs to Rahul — the prompt explicitly names Emma, so targetRef MUST be "Emma", never "Rahul")
+  - "Add hosting fees to Priya's invoice" → edit, targetRef="Priya" (regardless of which client's invoice is currently active/most-recent in session)
+  - Only fall back to the most-recent or only-draft invoice in session when the prompt has NO possessive client name at all (e.g. "add hosting fees to last invoice", "remove the discount")
+
   IMPORTANT: "Invoice Priya ₹50,000" has no modification intent → "new"
   IMPORTANT: "Credit note for Priya ₹5,000 due to revision in last invoice" → "new"
   IMPORTANT: Any prompt starting with "credit note" → ALWAYS "new"
@@ -467,11 +473,34 @@ Also output:
   const isSplit = intent === "split";
   if (isSplit) intent = "new";
 
+  let correctedTargetRef = result.targetRef || "";
+  if (intent === "edit") {
+    const possessiveMatch = state.prompt.match(
+      /\b([A-Z][a-zA-Z]*)'s\s+invoice\b/
+    );
+    if (possessiveMatch && possessiveMatch[1]) {
+      const promptClient = possessiveMatch[1];
+      if (
+        correctedTargetRef &&
+        correctedTargetRef.toLowerCase() !== promptClient.toLowerCase()
+      ) {
+        console.log(
+          "🔧 targetRef correction:",
+          correctedTargetRef,
+          "→",
+          promptClient,
+          "(possessive name in prompt overrides LLM extraction)"
+        );
+      }
+      correctedTargetRef = promptClient;
+    }
+  }
+
   console.log(
     "🔀 Router result:",
     JSON.stringify({
       intent: result.intent,
-      targetRef: result.targetRef,
+      targetRef: correctedTargetRef,
       clientName: result.clientName,
     })
   );
@@ -481,7 +510,7 @@ Also output:
     isMultiple: result.isMultiple || (result.estimatedCount > 1 && !isSplit),
     isSplit,
     splitCount: isSplit ? result.estimatedCount : 1,
-    targetRef: result.targetRef || "",
+    targetRef: correctedTargetRef,
     routerNotes: result.notes,
   };
 }

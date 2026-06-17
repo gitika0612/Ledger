@@ -75,7 +75,8 @@ type PendingStatus =
   | "awaiting_confirm_same"
   | "awaiting_ambiguity"
   | "awaiting_edit_ambiguity"
-  | "awaiting_client_name";
+  | "awaiting_client_name"
+  | "awaiting_collision_name";
 
 type BatchItem = {
   invoice: ParsedInvoice;
@@ -94,6 +95,10 @@ interface PendingState {
   ambiguitySourceRef?: string;
   pendingEmail?: string;
   pendingBatch?: BatchItem[];
+  // Source client name for the name-collision flow — the prompt that
+  // triggered the collision is re-run with this name kept fixed and only
+  // the destination name swapped in once the user supplies one.
+  collisionSourceClientName?: string;
 }
 
 // ── Detects if a reply while awaiting client details is an invoice override ──
@@ -718,6 +723,17 @@ export function useInvoiceChat() {
       }
 
       case "ambiguous": {
+        if (result.collisionType === "name_collision") {
+          setPending({
+            status: "awaiting_collision_name",
+            sessionId,
+            originalPrompt,
+            collisionSourceClientName: result.sourceClientName,
+          });
+          await addAIMessage(message, sessionId);
+          break;
+        }
+
         const destinationClientName =
           extractDestinationClientFromPrompt(originalPrompt);
         setPending({
@@ -900,6 +916,71 @@ export function useInvoiceChat() {
   const handlePendingReply = async (reply: string, sessionId: string) => {
     const current = pendingStateRef.current;
     if (!current || !user) return;
+
+    // ── Name-collision resolution ──
+    // The previous turn told the user their proposed "new client" name was
+    // identical to the source client and asked for a distinguishing name.
+    // This reply is just that name — not a full invoice prompt — so it
+    // must NOT go through the general AI parser (which would try to
+    // re-interpret it as a new command and likely re-collide). Validate
+    // directly: reject if it's still the bare source name (or empty), or
+    // append it as the destination and re-run the original copy prompt.
+    if (current.status === "awaiting_collision_name") {
+      const sourceClientName = current.collisionSourceClientName ?? "";
+      const isMeaningfullyDifferent = (() => {
+        // Strip filler words ("yes", "new", "client", etc.) so a sloppy
+        // reply like "yes new client Priya" is still correctly recognized
+        // as NOT providing a distinguishing name — without this, a plain
+        // string-equality check would let it through since the raw text
+        // differs from "Priya" even though the actual name embedded in it
+        // is identical.
+        const FILLER_WORDS = new Set([
+          "yes",
+          "new",
+          "client",
+          "named",
+          "the",
+          "a",
+          "an",
+          "is",
+          "same",
+          "as",
+        ]);
+        const cleaned = reply
+          .toLowerCase()
+          .replace(/[^a-z0-9\s]/g, " ")
+          .split(/\s+/)
+          .filter((w) => w && !FILLER_WORDS.has(w))
+          .join(" ")
+          .trim();
+        return (
+          cleaned !== "" && cleaned !== sourceClientName.toLowerCase().trim()
+        );
+      })();
+
+      if (!isMeaningfullyDifferent) {
+        await addAIMessage(
+          `That's still the same as **${sourceClientName}** — I need something to tell them apart, like **"${sourceClientName} - Marketing"** or a company name. What should I use?`,
+          sessionId
+        );
+        return;
+      }
+      setPending(null);
+      const sessionContext = buildSessionContext(sessionInvoicesRef.current);
+      const result = await parseInvoiceWithAI(
+        current.originalPrompt,
+        user.id,
+        sessionContext,
+        null,
+        {
+          status: "awaiting_collision_name",
+          originalPrompt: current.originalPrompt,
+          resolvedDestinationName: reply.trim(),
+        }
+      );
+      await handleAgentResult(result, sessionId, current.originalPrompt);
+      return;
+    }
 
     // ── Invoice override while awaiting client details ──
     // When user is in awaiting_client_details flow but types an invoice

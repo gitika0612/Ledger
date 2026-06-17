@@ -345,7 +345,7 @@ function applyTaxCorrection(raw: ParsedInvoice, prompt: string): ParsedInvoice {
   console.log("🔍 applyTax:", { isInclusive, prompt: prompt.slice(0, 50) });
 
   const isNoTax =
-    /(no\s+vat|no\s+tax|no\s+gst|excluding|excludes|excl\.|tax[\s-]?exempt|tax[\s-]?free|0%\s*(vat|tax|gst)?)/i.test(
+    /(no\s+vat|no\s+tax|no\s+gst|excluding|excludes|excl\.|tax[\s-]?exempt|tax[\s-]?free|\b0%\s*(vat|tax|gst))/i.test(
       prompt
     );
   const isPlusTax = detectPlusTax(prompt);
@@ -553,13 +553,28 @@ function applyTaxCorrection(raw: ParsedInvoice, prompt: string): ParsedInvoice {
 
   // ── Case 6: No tax mention — INR gets default 18% GST, USD/EUR get 0 ──
   if (currency === "INR") {
-    // Keep whatever GST the LLM set (it knows the INR default is 18%)
+    // Enforce the documented default. By this point in the function,
+    // isNoTax/isPlusTax/hasRate are all false — meaning the prompt contains
+    // NO explicit tax signal whatsoever. The LLM can sometimes misread
+    // unrelated percentages in the prompt (e.g. a line-item split like
+    // "40% design, 60% development") as a tax-rate signal and zero out
+    // gstPercent on its own, even though nothing tax-related was said.
+    // Since we've already confirmed there's no explicit tax signal here,
+    // any non-zero gstPercent the LLM set is suspect — fall back to the
+    // documented 18% default rather than trusting raw.gstPercent blindly.
+    const enforcedGstPercent =
+      raw.gstPercent && raw.gstPercent > 0 ? raw.gstPercent : 18;
+    console.log("🔍 Case6 GST enforcement:", {
+      llmGstPercent: raw.gstPercent,
+      enforcedGstPercent,
+    });
     return {
       ...raw,
       isTaxInclusive: false,
       taxPercent: 0,
       taxAmount: 0,
       taxLabel: "",
+      gstPercent: enforcedGstPercent,
       warning: "",
     };
   }

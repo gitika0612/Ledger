@@ -38,6 +38,8 @@ export interface AgentResult {
   };
   pendingClientName?: string;
   rawClientDetails?: string;
+  collisionType?: "name_collision";
+  sourceClientName?: string;
 }
 
 export interface SavedDraft {
@@ -55,11 +57,13 @@ export interface PendingStateContext {
     | "awaiting_confirm_same"
     | "awaiting_client_name"
     | "awaiting_ambiguity"
-    | "awaiting_edit_ambiguity";
+    | "awaiting_edit_ambiguity"
+    | "awaiting_collision_name";
   clientName?: string;
   invoice?: ParsedInvoice | null;
   originalPrompt?: string;
   matchedClient?: unknown;
+  resolvedDestinationName?: string;
 }
 
 export async function parseInvoiceWithAI(

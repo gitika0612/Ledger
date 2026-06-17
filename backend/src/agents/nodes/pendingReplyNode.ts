@@ -136,6 +136,16 @@ export async function pendingReplyNode(
     return copierResult;
   }
 
+  if (pendingState.status === "awaiting_collision_name") {
+    const copierResult = await copierNode({
+      ...state,
+      prompt: pendingState.originalPrompt ?? state.prompt,
+      pendingState,
+    });
+
+    return copierResult;
+  }
+
   // ── awaiting_edit_ambiguity: user was asked which invoice to EDIT ──
   if (pendingState.status === "awaiting_edit_ambiguity") {
     const replyLower = prompt.toLowerCase().trim();

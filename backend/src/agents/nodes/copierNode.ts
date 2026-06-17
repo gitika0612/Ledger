@@ -422,6 +422,8 @@ function extractDestinationClient(prompt: string): string | null {
   return null;
 }
 
+const HAS_NEW_CLIENT_SIGNAL = /\bnew\s+client\b/i;
+
 export async function copierNode(
   state: InvoiceAgentState
 ): Promise<Partial<InvoiceAgentState>> {
@@ -561,9 +563,36 @@ export async function copierNode(
   }
 
   // ── Extract destination client name ──
-  const extractedDestination = extractDestinationClient(state.prompt);
-  const newClientName = extractedDestination ?? sourceInv.clientName;
+  // If the frontend already resolved a distinguishing name (collision
+  // retry flow), use it directly — skip extractDestinationClient entirely.
+  // That regex only captures bare letters, so it would truncate something
+  // like "Priya - Marketing" down to just "Priya", re-triggering the exact
+  // collision this name was meant to resolve.
+  const resolvedDestinationName = state.pendingState?.resolvedDestinationName;
+  const extractedDestination = resolvedDestinationName
+    ? null
+    : extractDestinationClient(state.prompt);
+  const newClientName =
+    resolvedDestinationName ?? extractedDestination ?? sourceInv.clientName;
   console.log("✅ Destination client:", newClientName);
+
+  const isNameCollision =
+    !resolvedDestinationName &&
+    HAS_NEW_CLIENT_SIGNAL.test(state.prompt) &&
+    newClientName.toLowerCase().trim() ===
+      sourceInv.clientName.toLowerCase().trim();
+
+  if (isNameCollision) {
+    return {
+      agentResult: {
+        action: "ambiguous",
+        message: `You said **"new client"** but the name I'm seeing — **${newClientName}** — is the same as the invoice you're copying from. Since two clients can't share the exact same name, please add something to tell them apart — e.g. **"${newClientName} - Marketing"** or include their company name.`,
+        targetRef: ref,
+        collisionType: "name_collision",
+        sourceClientName: sourceInv.clientName,
+      },
+    };
+  }
 
   // ── Detect currency override in prompt ──
   const promptCurrency: "INR" | "USD" | "EUR" | null = /\$|USD|dollars?/i.test(
@@ -721,7 +750,9 @@ export async function copierNode(
     warning: "",
   });
 
-  const matchResult = state.userId
+  const matchResult = resolvedDestinationName
+    ? { type: "none" as const, client: null, score: 0 }
+    : state.userId
     ? await findClientMatch(state.userId, newClientName)
     : { type: "none" as const, client: null, score: 0 };
 

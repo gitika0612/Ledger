@@ -75,7 +75,16 @@ HARD EXAMPLES — memorise these:
 
 ━━━ LINE ITEMS ━━━
 CRITICAL: ALWAYS produce at least one line item. NEVER return empty lineItems array.
-If only a total amount is given with no service description → create one line item: description="Services", qty=1, unit="item", rate=[see below], amount=[see below]
+
+DESCRIPTION RULE — read this carefully, it is commonly gotten wrong:
+• If the prompt NAMES a service or work type (e.g. "logo design", "web development", "consulting", "bug fixes", "SEO audit") → lineItem.description = that exact service name, written naturally (capitalize first letter of each word). NEVER default to "Services" when a real service name is present in the prompt.
+• ONLY use description="Services" when the prompt gives an amount with NO service description at all — e.g. just a bare total with no work type mentioned.
+• "Bill Ankit for logo design ₹30,000" → description="Logo Design" (NOT "Services" — the service IS named)
+• "Bill Rahul ₹30,000" (no service mentioned at all) → description="Services" (correct default — nothing else to use)
+• "Invoice Priya ₹50,000 no GST" (no service mentioned) → description="Services"
+• "Invoice Meera $2,000 for SEO audit" → description="SEO Audit" (NOT "Services")
+
+If only a total amount is given with no service description at all → create one line item: description="Services", qty=1, unit="item", rate=[see below], amount=[see below]
 
 CRITICAL FOR TAX-INCLUSIVE WITH A RATE (isTaxInclusive=TRUE, rate > 0):
   lineItem.rate = lineItem.amount = back-calculated PRE-TAX amount (NOT the stated total)
@@ -127,6 +136,13 @@ Other line item examples:
   → lineItem.amount = total − gstAmount
   → total stays EXACTLY as stated
   EXAMPLE: "₹1,18,000 inclusive of 18% GST" → lineItem.amount=100000, gstAmount=18000, total=118000, isTaxInclusive=true ✓
+
+PERCENTAGE SPLITS ARE NOT TAX SIGNALS — read this carefully:
+• "40% design, 60% development" / "60% advance, 40% balance" / any "X% [work-type], Y% [work-type]" pattern describes how the TOTAL divides across MULTIPLE LINE ITEMS. It has NOTHING to do with GST/tax.
+• When a prompt has a percentage split like this AND does not separately mention GST/tax by name, gstPercent MUST STILL default to 18 (the standard INR default) — do NOT set gstPercent=0 just because percentages are present in the prompt.
+• "Invoice Rahul ₹1,00,000 — 40% design, 60% development" → gstPercent=18 (default, since no tax was mentioned), lineItems=[Design ₹40,000, Development ₹60,000], gstAmount=18000, total=118000
+• "Invoice Rahul ₹1,00,000 — 40% design, 60% development, no GST" → gstPercent=0 (explicit "no GST" overrides the default), total=100000
+• The ONLY way gstPercent becomes 0 is an EXPLICIT tax signal in the prompt ("no GST", "0% GST", "tax exempt") — never because the prompt happens to contain percentage numbers for unrelated reasons.
 
 ━━━ CRITICAL: GST/IGST ON EUR/USD INVOICES — READ THIS FIRST ━━━
 BEFORE applying any tax rule below, check: is the currency EUR or USD?
