@@ -34,7 +34,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { SendInvoiceModal } from "@/components/invoice/modals/SendInvoiceModel";
-import { getClientByName } from "@/lib/api/clientApi";
+import { getClientByName, updateClientByName } from "@/lib/api/clientApi";
 import { toast } from "sonner";
 import { formatCurrency } from "@/lib/currency";
 import { useAuth } from "@/hooks/useAuth";
@@ -301,6 +301,16 @@ export function InvoiceListPage() {
     setInvoices((prev) =>
       prev.map((inv) => (inv._id === id ? { ...inv, ...data } : inv))
     );
+
+    if (user && data.clientName) {
+      await updateClientByName(user.id, data.clientName, {
+        email: data.clientEmail,
+        address: data.clientAddress,
+        city: data.clientCity,
+        state: data.clientState,
+        pincode: data.clientPincode,
+      });
+    }
   };
 
   const handleOpenEditModal = async (inv: Invoice, e: React.MouseEvent) => {

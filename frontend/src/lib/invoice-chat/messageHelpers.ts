@@ -23,16 +23,3 @@ export function toUIMessage(msg: ChatMessageAPI): UIMessage {
     dbMessageId: msg._id,
   };
 }
-
-export function extractClientSection(
-  text: string,
-  clientName: string
-): string | null {
-  const regex = new RegExp(
-    `${clientName}\\s*[-:]\\s*(.+?)(?=\\b[A-Z][a-z]+\\s*[-:]|$)`,
-    "is"
-  );
-
-  const match = text.match(regex);
-  return match ? match[1].trim() : null;
-}

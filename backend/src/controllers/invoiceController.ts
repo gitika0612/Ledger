@@ -2,9 +2,7 @@
 import { Request, Response } from "express";
 import { Invoice } from "../models/Invoice";
 import { generateInvoiceNumber } from "../lib/invoiceHelper";
-import { embedInvoice } from "../lib/embeddingService";
 import { runInvoiceAgent } from "../agents/invoiceAgent";
-import { ParsedInvoice } from "../agents/schemas/invoiceSchema";
 
 // ── Parse invoice (main AI endpoint) ──
 export async function parseInvoice(req: Request, res: Response): Promise<void> {
@@ -242,10 +240,6 @@ export async function confirmInvoice(
       { new: true }
     );
     console.log(`✅ Confirmed: ${updated?.invoiceNumber}`);
-    embedInvoice(id).catch((err: unknown) => {
-      const message = err instanceof Error ? err.message : "Unknown error";
-      console.warn(`⚠️ Embedding failed for ${id}:`, message);
-    });
     res.status(200).json({ success: true, invoice: updated });
   } catch (err) {
     console.error("❌ Confirm error:", err);

@@ -244,6 +244,12 @@ function parseBlockToInvoice(block: string): ParsedInvoice | null {
     ? "EUR"
     : "INR";
 
+  // ── isTaxInclusive flag ──
+  // Stored in session context as "Tax Inclusive: true" when the invoice
+  // was created with an inclusive total (e.g. "€3,500 VAT included").
+  // Without this, editorNode would add tax on top instead of back-calculating.
+  const isTaxInclusive = /Tax Inclusive:\s*true/i.test(block);
+
   const gstMatch = block.match(/GST:\s*([\d.]+)%\s*(\w+)/i);
   const taxLineMatch = block.match(/Tax:\s*([\d.]+)%\s*(\w+)/i);
   const totalMatch = block.match(/Total:\s*[₹$€]?([\d,]+)/i);
@@ -321,6 +327,7 @@ function parseBlockToInvoice(block: string): ParsedInvoice | null {
           month: "long",
           year: "numeric",
         }),
+      isTaxInclusive,
       changedFields: [],
       warning: "",
     } as unknown as ParsedInvoice;
@@ -374,6 +381,7 @@ function parseBlockToInvoice(block: string): ParsedInvoice | null {
           month: "long",
           year: "numeric",
         }),
+      isTaxInclusive,
       changedFields: [],
       warning: "",
     } as unknown as ParsedInvoice;
@@ -409,6 +417,7 @@ async function fetchInvoiceFromDB(
       taxPercent: inv.taxPercent ?? 0,
       taxAmount: inv.taxAmount ?? 0,
       taxLabel: inv.taxLabel ?? "",
+      isTaxInclusive: inv.isTaxInclusive ?? false,
       discountType:
         (inv.discountType as "percent" | "amount" | "none") ?? "none",
       discountValue: inv.discountValue ?? 0,
@@ -448,7 +457,6 @@ export async function editorNode(
 
   // ── DB fallback ONLY for explicit invoice numbers (INV-XXXX) ──
   // Never fall back to DB by client name — that would edit invoices from other sessions.
-  // If user says "edit Rahul's invoice" but Rahul has no invoice in this session → not_found.
   if (!existing && state.userId && ref && /^INV-/i.test(ref)) {
     existing = await fetchInvoiceFromDB(state.userId, ref);
     if (existing)
@@ -459,7 +467,6 @@ export async function editorNode(
   }
 
   if (!existing) {
-    // Check if a specific client was targeted but not found in session
     const hasSpecificTarget = ref.length > 0;
     const notFoundMsg = hasSpecificTarget
       ? `I couldn't find an invoice for **${ref}** in this session. Check the side panel or try specifying an invoice number (e.g. INV-2026-001).`
@@ -477,15 +484,48 @@ export async function editorNode(
   // ── Deterministic GST change — INR only ──
   const gstChange = detectGstChange(state.prompt, currency);
   if (gstChange) {
-    const updated = recalculateTotals({
-      ...existing,
-      gstPercent: gstChange.gstPercent,
-      gstType: gstChange.gstType ?? existing.gstType,
-    });
-    const label =
-      gstChange.gstPercent === 0
-        ? "Removed GST (0%)"
-        : `Added GST (${gstChange.gstPercent}%)`;
+    let updated: ParsedInvoice;
+    let label: string;
+
+    if (existing.isTaxInclusive && (gstChange.gstPercent ?? 0) > 0) {
+      // ── Tax-inclusive invoice: back-calculate from original total ──
+      // The user stated a total that already includes GST.
+      // When they now specify the GST rate, we split it correctly
+      // instead of adding MORE tax on top.
+      const statedTotal = existing.total;
+      const rate = gstChange.gstPercent;
+      const preTax = Math.round((statedTotal * 100) / (100 + rate));
+      const gstAmount = statedTotal - preTax;
+      const gstType = gstChange.gstType ?? existing.gstType ?? "CGST_SGST";
+
+      updated = recalculateTotals({
+        ...existing,
+        isTaxInclusive: true,
+        gstPercent: rate,
+        gstType,
+        lineItems: existing.lineItems.map((item, i) =>
+          i === 0 ? { ...item, amount: preTax, rate: preTax } : item
+        ),
+        subtotal: preTax,
+        taxableAmount: preTax,
+        total: statedTotal,
+      });
+      label = `Set GST to ${rate}% (back-calculated from ₹${statedTotal.toLocaleString(
+        "en-IN"
+      )} — total unchanged)`;
+    } else {
+      // Standard add-on GST
+      updated = recalculateTotals({
+        ...existing,
+        gstPercent: gstChange.gstPercent,
+        gstType: gstChange.gstType ?? existing.gstType,
+      });
+      label =
+        gstChange.gstPercent === 0
+          ? "Removed GST (0%)"
+          : `Added GST (${gstChange.gstPercent}%)`;
+    }
+
     return {
       parsedInvoice: updated,
       agentResult: {
@@ -501,15 +541,47 @@ export async function editorNode(
   // ── Deterministic VAT/Tax change — USD/EUR only ──
   const taxChange = detectTaxChange(state.prompt, currency);
   if (taxChange) {
-    const updated = recalculateTotals({
-      ...existing,
-      taxPercent: taxChange.taxPercent,
-      taxLabel: taxChange.taxLabel,
-    });
-    const label =
-      taxChange.taxPercent === 0
-        ? `Removed ${taxChange.taxLabel} (0%)`
-        : `Updated ${taxChange.taxLabel} to ${taxChange.taxPercent}%`;
+    let updated: ParsedInvoice;
+    let label: string;
+
+    if (existing.isTaxInclusive && taxChange.taxPercent > 0) {
+      // ── Tax-inclusive invoice: back-calculate from original total ──
+      // "Invoice Emma €3,500 VAT included" → total=€3,500 already includes VAT.
+      // "Add 10% VAT" → back-calculate: preTax=€3,182, VAT=€318, total stays €3,500.
+      const statedTotal = existing.total;
+      const rate = taxChange.taxPercent;
+      const preTax = Math.round((statedTotal * 100) / (100 + rate));
+      const taxAmount = statedTotal - preTax;
+
+      updated = recalculateTotals({
+        ...existing,
+        isTaxInclusive: true,
+        taxPercent: rate,
+        taxAmount,
+        taxLabel: taxChange.taxLabel,
+        lineItems: existing.lineItems.map((item, i) =>
+          i === 0 ? { ...item, amount: preTax, rate: preTax } : item
+        ),
+        subtotal: preTax,
+        taxableAmount: preTax,
+        total: statedTotal, // total stays exactly as originally stated
+      });
+      label = `Set ${taxChange.taxLabel} to ${rate}% (back-calculated from ${
+        currency === "EUR" ? "€" : "$"
+      }${statedTotal.toLocaleString("en-IN")} — total unchanged)`;
+    } else {
+      // Standard add-on tax
+      updated = recalculateTotals({
+        ...existing,
+        taxPercent: taxChange.taxPercent,
+        taxLabel: taxChange.taxLabel,
+      });
+      label =
+        taxChange.taxPercent === 0
+          ? `Removed ${taxChange.taxLabel} (0%)`
+          : `Updated ${taxChange.taxLabel} to ${taxChange.taxPercent}%`;
+    }
+
     return {
       parsedInvoice: updated,
       agentResult: {
@@ -560,7 +632,6 @@ export async function editorNode(
   }
 
   // ── Deterministic LATE FEE ──
-  // "add 2% late fee", "add late fee 2%", "2% late fee"
   const lateFeeRate = detectLateFee(state.prompt);
   if (lateFeeRate !== null && lateFeeRate > 0) {
     const feeAmount = Math.round((existing.subtotal * lateFeeRate) / 100);

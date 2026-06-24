@@ -66,7 +66,7 @@ export async function sendInvoiceEmail(
   const totalStr = formatAmount(total, currency);
 
   const { error } = await resend.emails.send({
-    from: `${fromName} <onboarding@resend.dev>`,
+    from: `${fromName} <invoices@ledgerbrain.app>`,
     to: toEmail,
     subject: `Invoice ${invoiceNumber} from ${fromName} — ${totalStr} due ${dueDateStr}`,
     html: `
@@ -222,7 +222,7 @@ export async function sendInvoiceEmail(
                       <tr>
                         <td style="background:#f9fafb; border-top:1px solid #f0f0ec; padding:16px 36px; text-align:center;">
                           <p style="margin:0; font-size:11px; color:#9ca3af;">
-                            Sent via <strong style="color:#6b7280;">Ledger</strong> · ledgerbrain.vercel.app
+                            Sent via <strong style="color:#6b7280;">Ledger</strong> · ledgerbrain.app
                           </p>
                         </td>
                       </tr>

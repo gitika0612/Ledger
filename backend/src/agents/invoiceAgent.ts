@@ -1,6 +1,5 @@
 import { StateGraph, END, START, Annotation } from "@langchain/langgraph";
 import { routerNode } from "./nodes/routerNode";
-import { ragNode } from "./nodes/ragNode";
 import { generatorNode } from "./nodes/generatorNode";
 import { editorNode } from "./nodes/editorNode";
 import { copierNode } from "./nodes/copierNode";
@@ -8,7 +7,6 @@ import { multiInvoiceNode } from "./nodes/multiInvoiceNode";
 import { pendingReplyNode } from "./nodes/pendingReplyNode";
 import { queryNode } from "./nodes/queryNode";
 import { chatNode } from "./nodes/chatNode";
-import { IInvoiceDocument } from "../models/Invoice";
 import { ParsedInvoice } from "./schemas/invoiceSchema";
 import {
   InvoiceWithMatch,
@@ -53,14 +51,6 @@ const AgentStateAnnotation = Annotation.Root({
   routerNotes: Annotation<string>({
     reducer: (x, y) => y ?? x,
     default: () => "",
-  }),
-  memoryContext: Annotation<string>({
-    reducer: (x, y) => y ?? x,
-    default: () => "No past invoice history for this client.",
-  }),
-  retrievedInvoices: Annotation<IInvoiceDocument[]>({
-    reducer: (x, y) => y ?? x,
-    default: () => [],
   }),
   parsedInvoice: Annotation<ParsedInvoice | null>({
     reducer: (x, y) => y ?? x,
@@ -109,7 +99,7 @@ function routeAfterRouter(state: AgentState): string {
   if (state.isMultiple || state.intent === "multi") return "multiInvoice";
   if (state.intent === "edit") return "editor";
   if (state.intent === "copy") return "copier";
-  return "rag";
+  return "generator";
 }
 
 function routeAfterMulti(state: AgentState): string {
@@ -120,7 +110,6 @@ function routeAfterMulti(state: AgentState): string {
 export function createInvoiceAgent() {
   const graph = new StateGraph(AgentStateAnnotation)
     .addNode("router", routerNode)
-    .addNode("rag", ragNode)
     .addNode("generator", generatorNode)
     .addNode("editor", editorNode)
     .addNode("copier", copierNode)
@@ -135,12 +124,11 @@ export function createInvoiceAgent() {
     .addConditionalEdges("router", routeAfterRouter, {
       query: "query",
       chat: "chat",
-      rag: "rag",
       editor: "editor",
       copier: "copier",
       multiInvoice: "multiInvoice",
+      generator: "generator",
     })
-    .addEdge("rag", "generator")
     .addConditionalEdges("multiInvoice", routeAfterMulti, {
       generator: "generator",
       [END]: END,

@@ -19,14 +19,17 @@ import {
   updateInvoice,
 } from "@/lib/api/invoiceApi";
 import { downloadInvoicePDF } from "@/lib/downloadPDF";
-import { EditInvoiceModal } from "@/components/invoice/modals/EditInvoiceModal";
+import {
+  EditInvoiceData,
+  EditInvoiceModal,
+} from "@/components/invoice/modals/EditInvoiceModal";
 import { LineItem } from "@/components/invoice/InvoicePreviewCard";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { SendInvoiceModal } from "@/components/invoice/modals/SendInvoiceModel";
 import { toast } from "sonner";
-import { getClientByName } from "@/lib/api/clientApi";
+import { getClientByName, updateClientByName } from "@/lib/api/clientApi";
 import type { ClientAPI } from "@/lib/api/clientApi";
 import { formatCurrency } from "@/lib/currency";
 import { useAuth } from "@/hooks/useAuth";
@@ -173,12 +176,36 @@ export function InvoiceViewPage() {
     );
   };
 
-  const handleSaveEdit = async (invoiceId: string, data: Partial<Invoice>) => {
+  const handleSaveEdit = async (
+    invoiceId: string,
+    data: Partial<EditInvoiceData>
+  ) => {
     try {
       await updateInvoice(invoiceId, data);
       setInvoice((prev) => (prev ? { ...prev, ...data } : prev));
+
+      if (user && data.clientName) {
+        const updatedClient = await updateClientByName(
+          user.id,
+          data.clientName,
+          {
+            email: data.clientEmail,
+            address: data.clientAddress,
+            city: data.clientCity,
+            state: data.clientState,
+            pincode: data.clientPincode,
+          }
+        );
+
+        // ── Refresh client card immediately ──
+        // updateClientByName returns the updated client from DB.
+        // Set it directly so the right panel reflects changes without a page reload.
+        if (updatedClient) {
+          setClient(updatedClient);
+        }
+      }
     } catch (err) {
-      console.error(err);
+      console.error("Failed to save invoice:", err);
     }
   };
 

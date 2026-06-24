@@ -93,3 +93,16 @@ export async function parseClientDetailsFromText(
   );
   return response.data;
 }
+
+export async function updateClientByName(
+  userId: string,
+  name: string,
+  data: Partial<Omit<UpsertClientData, "name">>
+): Promise<ClientAPI | null> {
+  const response = await api.patch(
+    `/clients/by-name/${encodeURIComponent(name)}`,
+    data,
+    { headers: { "x-clerk-id": userId } }
+  );
+  return response.data.client;
+}

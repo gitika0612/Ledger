@@ -82,6 +82,49 @@ export async function upsertClient(req: Request, res: Response): Promise<void> {
   }
 }
 
+// ── Update client by name  ──
+export async function updateClientByName(
+  req: Request,
+  res: Response
+): Promise<void> {
+  const userId = req.headers["x-clerk-id"] as string;
+  const { name } = req.params;
+
+  if (!userId || !name) {
+    res.status(400).json({ error: "Missing user ID or name" });
+    return;
+  }
+
+  const { email, address, city, state, pincode, phone, gstin } = req.body;
+
+  try {
+    const client = await Client.findOneAndUpdate(
+      { userId, name: { $regex: new RegExp(`^${name}$`, "i") } },
+      {
+        ...(email && { email: email.toLowerCase().trim() }),
+        ...(address !== undefined && { address }),
+        ...(city !== undefined && { city }),
+        ...(state !== undefined && { state }),
+        ...(pincode !== undefined && { pincode }),
+        ...(phone !== undefined && { phone }),
+        ...(gstin !== undefined && { gstin }),
+      },
+      { new: true }
+    );
+
+    if (!client) {
+      res.status(404).json({ error: "Client not found" });
+      return;
+    }
+
+    console.log(`✅ Client updated by name: ${client.name}`);
+    res.status(200).json({ success: true, client });
+  } catch (err) {
+    console.error("❌ Update client by name error:", err);
+    res.status(500).json({ error: "Failed to update client" });
+  }
+}
+
 // ── Get client by name (for autofill) ──
 export async function getClientByName(
   req: Request,

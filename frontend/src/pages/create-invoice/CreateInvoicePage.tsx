@@ -5,6 +5,8 @@ import { ChatSidebar } from "@/components/invoice/chat-mode/ChatSidebar";
 import { InvoicePanel } from "@/components/invoice/InvoicePanel";
 import { InvoiceMiniCard } from "@/components/invoice/InvoiceMiniCard";
 import { useInvoiceChat } from "@/hooks/useInvoiceChat";
+import { SESSION_LIMIT } from "@/lib/invoice-chat/sessionHelpers";
+import { AlertTriangle, Plus } from "lucide-react";
 
 export function CreateInvoicePage() {
   const {
@@ -32,6 +34,8 @@ export function CreateInvoicePage() {
     setSessionInvoices,
     scrollToMessage,
   } = useInvoiceChat();
+
+  const isAtSessionLimit = sessionInvoices.length >= SESSION_LIMIT;
 
   return (
     <div className="h-screen bg-[#F9FAFB] flex overflow-hidden">
@@ -102,6 +106,29 @@ export function CreateInvoicePage() {
           {isLoading && <TypingIndicator />}
           <div ref={bottomRef} />
         </div>
+
+        {/* ── Session limit banner ── */}
+        {/* Shown as a system notice above the input, not as a chat message.
+            Appears once the session hits the limit — stays visible until
+            user starts a new chat. Editing existing invoices still works. */}
+        {isAtSessionLimit && (
+          <div className="mx-4 mb-2 flex items-center gap-3 px-4 py-2.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800">
+            <AlertTriangle className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
+            <span className="flex-1">
+              This session has reached{" "}
+              <span className="font-semibold">{SESSION_LIMIT} invoices</span>.
+              You can still edit existing ones, but new invoices require a fresh
+              chat.
+            </span>
+            <button
+              onClick={handleNewChat}
+              className="flex items-center gap-1 font-semibold text-amber-900 hover:text-amber-950 whitespace-nowrap"
+            >
+              <Plus className="w-3 h-3" />
+              New chat
+            </button>
+          </div>
+        )}
 
         <ChatInput
           onSend={handleSend}

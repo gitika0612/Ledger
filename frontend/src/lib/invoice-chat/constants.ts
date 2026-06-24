@@ -14,12 +14,3 @@ export const WELCOME: UIMessage = {
     "Hi! Tell me what invoice you want to create, edit, or copy. You can also create invoices for multiple clients in one chat.",
   timestamp: getTime(),
 };
-
-export const BULK_SAFE_FIELDS = new Set([
-  "paymentTermsDays",
-  "gstPercent",
-  "gstType",
-  "discountType",
-  "discountValue",
-  "notes",
-]);

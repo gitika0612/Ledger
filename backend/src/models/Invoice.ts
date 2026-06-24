@@ -45,9 +45,6 @@ export interface IInvoiceDocument extends Document {
   dueDate: Date;
   currency?: "INR" | "USD" | "EUR";
   idempotencyKey: string;
-  // ── RAG ──
-  embedding?: number[];
-  embeddedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -130,13 +127,6 @@ const invoiceSchema = new Schema<IInvoiceDocument>(
       sparse: true,
       index: true,
     },
-    // ── RAG ──
-    embedding: {
-      type: [Number],
-      default: undefined,
-      select: false,
-    },
-    embeddedAt: { type: Date, default: undefined },
   },
   { timestamps: true }
 );

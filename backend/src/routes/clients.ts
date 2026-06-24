@@ -6,6 +6,7 @@ import {
   upsertClient,
   deleteClient,
   parseClientDetails,
+  updateClientByName,
 } from "../controllers/clientController";
 
 const router = Router();
@@ -14,6 +15,7 @@ const router = Router();
 router.get("/", getUserClients);
 router.get("/search", getClientByName);
 router.post("/", upsertClient);
+router.patch("/by-name/:name", updateClientByName);
 router.post("/parse-details", parseClientDetails);
 
 // ── Dynamic routes last ──

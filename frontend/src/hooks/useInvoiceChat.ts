@@ -29,6 +29,7 @@ import { recalculateTotals } from "@/lib/invoice-chat/invoiceHelpers";
 import {
   buildSessionContext,
   findMatchingInvoices,
+  SESSION_LIMIT,
 } from "@/lib/invoice-chat/sessionHelpers";
 import { formatCurrency } from "@/lib/currency";
 
@@ -95,27 +96,23 @@ interface PendingState {
   ambiguitySourceRef?: string;
   pendingEmail?: string;
   pendingBatch?: BatchItem[];
-  // Source client name for the name-collision flow — the prompt that
-  // triggered the collision is re-run with this name kept fixed and only
-  // the destination name swapped in once the user supplies one.
   collisionSourceClientName?: string;
 }
 
 // ── Detects if a reply while awaiting client details is an invoice override ──
-// e.g. "Add VAT 10%", "give 10% discount", "net 30", "add note: pay via bank"
 function isInvoiceOverride(reply: string): boolean {
   const r = reply.toLowerCase().trim();
   return (
-    /\b(vat|tax|gst)\s*\d/.test(r) || // "VAT 10%", "tax 18%", "gst 5%"
-    /add\s+(vat|tax|gst)/.test(r) || // "add VAT 10%"
-    /set\s+(vat|tax|gst)/.test(r) || // "set tax to 18%"
-    /\d+%\s*(vat|tax|gst|off|discount)/.test(r) || // "10% VAT", "5% off"
-    /\b(discount|off)\b/.test(r) || // "give 10% discount"
-    /net\s*\d+/.test(r) || // "net 30"
-    /payment\s*terms/.test(r) || // "payment terms 45 days"
-    /\d+\s*days(\s*(payment|terms))?/.test(r) || // "30 days"
-    /add\s+note/.test(r) || // "add note: ..."
-    /remove\s+\w+/.test(r) // "remove item"
+    /\b(vat|tax|gst)\s*\d/.test(r) ||
+    /add\s+(vat|tax|gst)/.test(r) ||
+    /set\s+(vat|tax|gst)/.test(r) ||
+    /\d+%\s*(vat|tax|gst|off|discount)/.test(r) ||
+    /\b(discount|off)\b/.test(r) ||
+    /net\s*\d+/.test(r) ||
+    /payment\s*terms/.test(r) ||
+    /\d+\s*days(\s*(payment|terms))?/.test(r) ||
+    /add\s+note/.test(r) ||
+    /remove\s+\w+/.test(r)
   );
 }
 
@@ -365,7 +362,9 @@ export function useInvoiceChat() {
     suppressGenericMessage = false
   ) => {
     if (!user) return;
-    const finalInvoice = recalculateTotals(invoice);
+    const finalInvoice = invoice.isTaxInclusive
+      ? invoice
+      : recalculateTotals(invoice);
 
     let savedDraft = null;
     try {
@@ -420,18 +419,18 @@ export function useInvoiceChat() {
       invoiceNumber: savedDraft?.invoiceNumber,
     };
 
+    // 1. Update ref first
+    sessionInvoicesRef.current = [...sessionInvoicesRef.current, newInvoice];
+
+    // 2. Sync React state
     if (currentSessionIdRef.current === sessionId) {
-      setSessionInvoices((prev) => {
-        const updated = [...prev, newInvoice];
-        if (autoSelect)
-          setSelectedPanelMessageId(updated[updated.length - 1].messageId);
-        return updated;
-      });
+      setSessionInvoices(sessionInvoicesRef.current);
+      if (autoSelect) setSelectedPanelMessageId(newInvoice.messageId);
     }
 
-    sessionInvoicesRef.current = [...sessionInvoicesRef.current, newInvoice];
     setActiveTab("draft");
 
+    // 3. Similar invoice warning — invoice-specific, show before limit warning
     if (
       savedDraft?.hasSimilar &&
       savedDraft.similarInvoiceNumber &&
@@ -503,9 +502,6 @@ export function useInvoiceChat() {
     sessionId: string
   ) => {
     // ── Lock check: Sent / Paid / Overdue invoices cannot be edited via chat ──
-    // Once an invoice has been sent to the client, it's already in their
-    // hands — editing it afterward would silently change what they received.
-    // (Confirmed-but-not-yet-sent invoices ARE still editable.)
     if (isLockedStatus(target.status)) {
       const statusLabel =
         target.status === "sent"
@@ -522,7 +518,9 @@ export function useInvoiceChat() {
       return;
     }
 
-    const finalInvoice = recalculateTotals(updatedInvoice);
+    const finalInvoice = updatedInvoice.isTaxInclusive
+      ? updatedInvoice
+      : recalculateTotals(updatedInvoice);
 
     if (target.invoiceId) {
       try {
@@ -572,12 +570,8 @@ export function useInvoiceChat() {
           true,
           true
         );
-        if (result.warning && currentSessionIdRef.current === sessionId) {
-          await addAIMessage(`⚠️ ${result.warning}`, sessionId);
-        }
         break;
       }
-
       case "needs_client": {
         if (!invoice) break;
         const matchType = result.matchResult?.type;
@@ -642,9 +636,6 @@ export function useInvoiceChat() {
             (s) => !isLockedStatus(s.status)
           );
 
-          // Only fall back to a draft when NO specific client/invoice was targeted.
-          // If a specific client (targetRef) was mentioned but not found in session,
-          // do NOT fall back — that would edit the wrong invoice.
           const hasSpecificTarget = (targetRef ?? "").trim().length > 0;
 
           if (!hasSpecificTarget && drafts.length === 1) {
@@ -676,7 +667,7 @@ export function useInvoiceChat() {
           break;
         }
 
-        // Multiple matches — filter out locked (sent/paid/overdue) ones first
+        // Multiple matches — filter out locked ones first
         const editableMatches = matches.filter(
           (m) => !isLockedStatus(m.status)
         );
@@ -918,22 +909,9 @@ export function useInvoiceChat() {
     if (!current || !user) return;
 
     // ── Name-collision resolution ──
-    // The previous turn told the user their proposed "new client" name was
-    // identical to the source client and asked for a distinguishing name.
-    // This reply is just that name — not a full invoice prompt — so it
-    // must NOT go through the general AI parser (which would try to
-    // re-interpret it as a new command and likely re-collide). Validate
-    // directly: reject if it's still the bare source name (or empty), or
-    // append it as the destination and re-run the original copy prompt.
     if (current.status === "awaiting_collision_name") {
       const sourceClientName = current.collisionSourceClientName ?? "";
       const isMeaningfullyDifferent = (() => {
-        // Strip filler words ("yes", "new", "client", etc.) so a sloppy
-        // reply like "yes new client Priya" is still correctly recognized
-        // as NOT providing a distinguishing name — without this, a plain
-        // string-equality check would let it through since the raw text
-        // differs from "Priya" even though the actual name embedded in it
-        // is identical.
         const FILLER_WORDS = new Set([
           "yes",
           "new",
@@ -983,15 +961,11 @@ export function useInvoiceChat() {
     }
 
     // ── Invoice override while awaiting client details ──
-    // When user is in awaiting_client_details flow but types an invoice
-    // modification (e.g. "Add VAT 10%", "give 10% discount", "net 30"),
-    // apply it to the pending invoice and re-ask for client details.
     if (
       current.status === "awaiting_client_details" &&
       current.invoice &&
       isInvoiceOverride(reply)
     ) {
-      // Try AI edit first
       const sessionContext = buildSessionContext(sessionInvoicesRef.current);
       const overrideResult = await parseInvoiceWithAI(
         reply,
@@ -1006,19 +980,15 @@ export function useInvoiceChat() {
         }
       );
 
-      // Get updated invoice — from AI edit result OR apply deterministically
       let updatedInvoice: ParsedInvoice | null =
         overrideResult.action === "edited" && overrideResult.invoice
           ? overrideResult.invoice
           : null;
 
-      // Deterministic fallback: if AI didn't return an edit,
-      // apply common overrides directly so they are never lost
       if (!updatedInvoice) {
         const r = reply.toLowerCase().trim();
         let patched = { ...current.invoice };
 
-        // VAT/Tax/GST rate change: "add 10% VAT", "set tax 18%", "VAT 10%", "20% VAT"
         const taxMatch =
           r.match(/(\d+(?:\.\d+)?)\s*%?\s*(vat|tax|gst)/i) ||
           r.match(/(vat|tax|gst)\s*[a-z\s]*?(\d+(?:\.\d+)?)/i);
@@ -1026,29 +996,14 @@ export function useInvoiceChat() {
           const rate = parseFloat(taxMatch[1] ?? taxMatch[2]);
           if (!isNaN(rate)) {
             const currency = patched.currency ?? "INR";
-            // wasInclusive = true only if invoice was explicitly inclusive WITH a warning
-            // (meaning isTaxInclusive=true AND no rate was set yet).
-            // If isTaxInclusive=true but taxPercent/gstPercent already has a value,
-            // the rate was already known — this is a rate-change edit, not an initial clarification.
-            // If isTaxInclusive=false, always add-on.
             const inv = current.invoice!;
             const existingRate =
               currency === "INR" ? inv.gstPercent ?? 0 : inv.taxPercent ?? 0;
-            // Only back-calculate if invoice was marked inclusive AND no rate set yet
             const wasInclusive =
               inv.isTaxInclusive === true && existingRate === 0;
-            console.log("🔍 Override tax check:", {
-              isTaxInclusive: inv.isTaxInclusive,
-              existingRate,
-              wasInclusive,
-              rate,
-              currency,
-              total: inv.total,
-            });
 
             if (currency === "INR") {
               if (wasInclusive) {
-                // Back-calculate: total stays the same, find pre-tax subtotal
                 const statedTotal = current.invoice!.total;
                 const preTax = Math.round((statedTotal * 100) / (100 + rate));
                 const gstAmount = statedTotal - preTax;
@@ -1067,13 +1022,12 @@ export function useInvoiceChat() {
                   igstAmount: 0,
                   total: statedTotal,
                 };
-                return; // skip recalculateTotals — values already correct
+                return;
               } else {
                 patched = { ...patched, gstPercent: rate };
               }
             } else {
               if (wasInclusive) {
-                // Back-calculate: total stays the same
                 const statedTotal = current.invoice!.total;
                 const preTax = Math.round((statedTotal * 100) / (100 + rate));
                 const taxAmount = statedTotal - preTax;
@@ -1091,7 +1045,6 @@ export function useInvoiceChat() {
                   total: statedTotal,
                 };
                 updatedInvoice = patched as ParsedInvoice;
-                // Skip the recalculateTotals below — already computed
                 const editMsg = applyOverrideSummary(reply, updatedInvoice);
                 setPending({
                   ...current,
@@ -1107,14 +1060,7 @@ export function useInvoiceChat() {
                     : current.pendingBatch,
                 });
                 await addAIMessage(
-                  `${editMsg}
-
-Please share **${current.clientName}**'s contact details:
-
-**Email** *(required)*
-*(Optional: Address, City, State, Phone, GSTIN)*
-
-Or type **skip** to continue without details.`,
+                  `${editMsg}\n\nPlease share **${current.clientName}**'s contact details:\n\n**Email** *(required)*\n*(Optional: Address, City, State, Phone, GSTIN)*\n\nOr type **skip** to continue without details.`,
                   sessionId
                 );
                 return;
@@ -1129,7 +1075,6 @@ Or type **skip** to continue without details.`,
           }
         }
 
-        // Discount: "10% discount", "give 10% off"
         const discountMatch = r.match(/(\d+(?:\.\d+)?)\s*%\s*(off|discount)/i);
         if (discountMatch) {
           const val = parseFloat(discountMatch[1]);
@@ -1142,7 +1087,6 @@ Or type **skip** to continue without details.`,
           }
         }
 
-        // Payment terms: "net 30", "30 days"
         const termsMatch =
           r.match(/(?:net\s*|payment\s*terms?\s*)(\d+)/i) ||
           r.match(/(\d+)\s*days/i);
@@ -1238,6 +1182,7 @@ Or type **skip** to continue without details.`,
               : item.invoice.clientName,
         },
       }));
+
     if (
       result.action === "needs_client" &&
       result.message === "_parse_client_details_"
@@ -1430,6 +1375,34 @@ Or type **skip** to continue without details.`,
       }
 
       const sessionContext = buildSessionContext(sessionInvoicesRef.current);
+
+      // ── Session limit check ──
+      // Let the router classify intent first, then block only
+      // creation/copy/multi. Edit, query and chat are always allowed.
+      if (sessionInvoicesRef.current.length >= SESSION_LIMIT) {
+        const result = await parseInvoiceWithAI(
+          prompt,
+          user.id,
+          sessionContext
+        );
+
+        const isBlockedIntent =
+          result.action === "created" ||
+          result.action === "copied" ||
+          result.action === "multi_created";
+
+        if (isBlockedIntent) {
+          loadSessions();
+          return;
+        }
+
+        // Edit, query, chat — pass through normally
+        await handleAgentResult(result, sessionId, prompt);
+        loadSessions();
+        return;
+      }
+
+      // ── Normal flow (under session limit) ──
       const result = await parseInvoiceWithAI(prompt, user.id, sessionContext);
       await handleAgentResult(result, sessionId, prompt);
       loadSessions();

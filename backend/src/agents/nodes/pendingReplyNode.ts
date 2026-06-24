@@ -5,6 +5,7 @@ import { Invoice } from "../../models/Invoice";
 import { ParsedInvoice } from "../schemas/invoiceSchema";
 import { recalculateTotals, formatCurrency } from "../utils/invoiceUtils";
 import { copierNode } from "./copierNode";
+import { editorNode } from "./editorNode";
 
 const PENDING_REPLY_PROMPT = `You are handling a conversational reply in an invoice chat assistant.
 
@@ -111,7 +112,6 @@ export async function pendingReplyNode(
   }
 
   // ── awaiting_ambiguity: user was asked which invoice to COPY ──
-  // They replied with an invoice number like "INV-2026-002"
   if (pendingState.status === "awaiting_ambiguity") {
     const invoiceRefMatch = prompt.match(/INV-\d{4}-\d+/i);
     const resolvedRef = invoiceRefMatch?.[0]?.trim() ?? prompt.trim();
@@ -125,8 +125,6 @@ export async function pendingReplyNode(
       };
     }
 
-    // Re-invoke copierNode with the specific invoice ref resolved.
-    // Use the original prompt so the destination client name (e.g. "Ankit") is preserved.
     const copierResult = await copierNode({
       ...state,
       targetRef: resolvedRef,
@@ -213,19 +211,18 @@ export async function pendingReplyNode(
       };
     }
 
-    return {
+    // ── Re-run the original edit on the resolved invoice ──
+    // Previously this just returned the invoice as-is without applying
+    // the edit. The user told us WHICH invoice to edit — now actually
+    // apply the original edit (e.g. "Add 10% VAT") to it.
+    const editResult = await editorNode({
+      ...state,
       parsedInvoice: targetInvoice,
       targetRef,
-      intent: "edit" as any,
-      agentResult: {
-        action: "edited",
-        message: `Got it! Invoice for **${
-          targetRef || targetInvoice.clientName
-        }**.`,
-        invoice: targetInvoice,
-        targetRef,
-      },
-    };
+      prompt: pendingState.originalPrompt ?? state.prompt,
+    });
+
+    return editResult;
   }
 
   const model = new ChatOpenAI({

@@ -1,6 +1,5 @@
 import { ParsedInvoice } from "./schemas/invoiceSchema";
 import { IClientDocument } from "../models/Client";
-import { IInvoiceDocument } from "../models/Invoice";
 
 export type AgentIntent =
   | "new"
@@ -84,8 +83,6 @@ export interface InvoiceAgentState {
   splitCount: number;
   targetRef: string;
   routerNotes: string;
-  memoryContext: string;
-  retrievedInvoices: IInvoiceDocument[];
   parsedInvoice: ParsedInvoice | null;
   parsedInvoices: ParsedInvoice[];
   invoicesWithMatch: InvoiceWithMatch[];
@@ -106,8 +103,6 @@ export const initialState: Omit<
   splitCount: 1,
   targetRef: "",
   routerNotes: "",
-  memoryContext: "No past invoice history for this client.",
-  retrievedInvoices: [],
   parsedInvoice: null,
   parsedInvoices: [],
   invoicesWithMatch: [],

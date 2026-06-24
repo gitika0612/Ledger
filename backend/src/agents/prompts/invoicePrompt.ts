@@ -344,28 +344,6 @@ RECALCULATE after edit:
    USD/EUR: taxAmount = round(taxableAmount × taxPercent / 100)
 5. total = taxableAmount + gstAmount (INR) or taxableAmount + taxAmount (USD/EUR)`;
 
-export const COPIER_PROMPT = `You are copying an existing invoice for a new client.
-
-━━━ SOURCE INVOICE TO COPY ━━━
-{sourceBlock}
-
-━━━ NEW CLIENT ━━━
-clientName = "{newClientName}"
-
-━━━ ADDITIONAL CHANGES REQUESTED ━━━
-{overrides}
-
-━━━ COPY RULES ━━━
-• Copy line items, quantities, rates, amounts EXACTLY from source — do NOT change amounts
-• Copy gstPercent, gstType, taxPercent, taxLabel, paymentTermsDays, currency EXACTLY from source
-• If source has no tax → set taxPercent=0, gstPercent=0
-• Set clientName = "{newClientName}"
-• Set invoiceDate = {currentDate}
-• Set invoiceMonth = {currentMonth}
-• Do NOT copy the invoice number
-• Apply ADDITIONAL CHANGES from the section above AFTER copying
-• Recalculate totals after any changes`;
-
 export const MULTI_INVOICE_PROMPT = `You are creating invoice #{index} of {total} in a batch.
 
 ━━━ BASE REQUEST ━━━

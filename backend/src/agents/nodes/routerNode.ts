@@ -24,8 +24,6 @@ export async function routerNode(
   state: InvoiceAgentState
 ): Promise<Partial<InvoiceAgentState>> {
   // ── Pre-check 0: Obvious greetings, thanks, and help requests ──
-  // Short, conversational messages with no invoice-related content.
-  // "Invoice Priya thanks" or similar would NOT match (too long / has invoice content).
   const trimmedPrompt = state.prompt.trim();
   const isGreetingOrThanks =
     /^(hi|hello|hey|hiya|yo|sup|good morning|good afternoon|good evening)[\s!.,]*$/i.test(
@@ -38,9 +36,6 @@ export async function routerNode(
       trimmedPrompt
     );
 
-  // ── "Create an invoice" / "I need to bill someone" — bare invoice-creation intent
-  // with NO client name and NO amount anywhere. These should never reach generatorNode
-  // (which would hallucinate numbers from its own prompt examples on empty input).
   const isBareInvoiceCreationPattern =
     /^(create|make|generate|let'?s create)\b.*\b(invoice|bill)\b/i.test(
       trimmedPrompt
@@ -52,7 +47,7 @@ export async function routerNode(
   const hasAnyAmount = /[₹$€]|\d/.test(trimmedPrompt);
   const hasAnyCapitalizedName = /[A-Z][a-zA-Z]+/.test(
     trimmedPrompt.replace(/^\w+/, "")
-  ); // exclude first word
+  );
   const hasStructureSignalForBareCheck =
     /\b(same|copy|but\s+for|repeat|duplicate|add|remove|replace|change|update|set|apply|delete|swap|edit|modify)\b/i.test(
       trimmedPrompt
@@ -66,7 +61,7 @@ export async function routerNode(
   const isQuestionAboutLedger =
     /^(how (can|do|does|would|should) (i|you|we|ledger)|can (i|you|we)|could (i|you|we)|is it possible to|does ledger|will (you|ledger|it)|what if (i|we))\b/i.test(
       trimmedPrompt
-    ) || /\?\s*$/.test(trimmedPrompt); // ends with "?" — almost always a genuine question, not a command
+    ) || /\?\s*$/.test(trimmedPrompt);
 
   if (isGreetingOrThanks || isBareInvoiceCreation || isQuestionAboutLedger) {
     console.log(
@@ -83,16 +78,48 @@ export async function routerNode(
     };
   }
 
+  // ── Pre-check: Pure tax/discount/terms edit with NO client name ──
+  // "Add 10% VAT", "Remove GST", "Give 10% discount", "Net 30", "No more tax"
+  // These never name a client — targetRef must be empty so the frontend
+  // uses selectedPanelMessageId (the invoice the user is currently viewing).
+  // Without this check, the LLM picks a client name from sessionContext
+  // (usually the most-mentioned one, not the most recent), causing wrong targeting.
+  const isPureTaxOrDiscountEdit =
+    /^(add|remove|set|apply|give|update|change|no\s+more|turn\s+off|zero\s+out|bump|kill)\s+(\d+%?\s*)?(vat|gst|tax|igst|cgst|sgst|discount|off|late\s*fee)\b/i.test(
+      trimmedPrompt
+    ) ||
+    /^(\d+%?\s*)(vat|gst|tax|off|discount)\b/i.test(trimmedPrompt) ||
+    /^no\s+(vat|gst|tax)\b/i.test(trimmedPrompt);
+
+  // Only fire if no client name appears in the prompt
+  // e.g. "Add 10% VAT to Emma's invoice" should NOT match — it has a client
+  const hasClientNameInPrompt = /\b[A-Z][a-zA-Z]{1,}\b/.test(
+    trimmedPrompt.replace(
+      /^(add|remove|set|apply|give|no|turn|zero|bump|kill|update|change)\s+/i,
+      ""
+    )
+  );
+
+  if (isPureTaxOrDiscountEdit && !hasClientNameInPrompt) {
+    console.log(
+      "🔀 Router pre-check: pure tax/discount edit, targetRef='' →",
+      trimmedPrompt.slice(0, 60)
+    );
+    return {
+      intent: "edit",
+      isMultiple: false,
+      isSplit: false,
+      splitCount: 1,
+      targetRef: "",
+      routerNotes: "deterministic: pure tax/discount/terms edit",
+    };
+  }
+
   // ── Pre-check 1: "Invoice/Bill [Name] ..." is ALWAYS new ──
-  // Prevents LLM from misclassifying new invoices as edits when client exists in session.
   const startsWithInvoice = /^(invoice|bill)\s+[a-z]/i.test(
     state.prompt.trim()
   );
 
-  // ── Does the prompt actually contain invoiceable content? ──
-  // A client name (capitalized word right after Invoice/Bill) OR a currency amount.
-  // "Invoice for the website thing" has neither — it's not a real invoice command,
-  // so it should fall through to the LLM router (→ chat) instead of forcing "new".
   const verbAndNextWord = state.prompt.trim().match(/^(invoice|bill)\s+(\S+)/i);
   const hasClientNameAfterVerb = verbAndNextWord
     ? /^[A-Z][a-zA-Z]*$/.test(verbAndNextWord[2])
@@ -136,9 +163,6 @@ export async function routerNode(
   }
 
   // ── Pre-check 2: "Invoice Priya again" — smart recency copy ──
-  // "Invoice [Name] again" with NO amount = copy that client's last invoice
-  // "Invoice Priya again for June" = copy Priya's last invoice, change month to June
-  // "Invoice Priya ₹50,000 again" has an amount → NOT this path (falls through to new)
   const againMatch = state.prompt.match(
     /^(?:invoice|bill)\s+([A-Za-z]+)\s+again\b/i
   );
@@ -162,8 +186,6 @@ export async function routerNode(
   }
 
   // ── Pre-check 3: Copy signals ──
-  // "Copy ...", "Same invoice as ...", "Same as last ...", "Repeat last ..."
-  // Also strip leading punctuation typos (e.g. ":Same invoice" → "Same invoice")
   const cleanPrompt = state.prompt.replace(/^[^a-zA-Z0-9₹$€]+/, "").trim();
   const isCopySignal =
     /^copy\s/i.test(cleanPrompt) ||
@@ -343,9 +365,18 @@ Examples:
   - "in INV-XXX" + any modification = ALWAYS edit
 
   CRITICAL targetRef RULE for possessive edits: whenever the prompt names a client via possessive ("[Name]'s invoice"), targetRef MUST be that exact name from the PROMPT TEXT — never substitute a different client name from the session context, even if that other client's invoice is the most recent one in the session. The possessive name in the prompt always wins.
-  - "Add consulting €2,000 to Emma's invoice" → edit, targetRef="Emma" (even if the most recent invoice in session belongs to Rahul — the prompt explicitly names Emma, so targetRef MUST be "Emma", never "Rahul")
-  - "Add hosting fees to Priya's invoice" → edit, targetRef="Priya" (regardless of which client's invoice is currently active/most-recent in session)
+  - "Add consulting €2,000 to Emma's invoice" → edit, targetRef="Emma"
+  - "Add hosting fees to Priya's invoice" → edit, targetRef="Priya"
   - Only fall back to the most-recent or only-draft invoice in session when the prompt has NO possessive client name at all (e.g. "add hosting fees to last invoice", "remove the discount")
+
+  CRITICAL targetRef RULE for no-client edits: when the prompt has NO client name at all
+  (e.g. "Add 10% VAT", "Remove GST", "Give 10% discount", "Net 30") → targetRef MUST be ""
+  NEVER set targetRef to a client name from session context for these prompts.
+  The frontend will use the currently selected/most-recent invoice automatically.
+  - "Add 10% VAT" → edit, targetRef=""
+  - "Remove GST" → edit, targetRef=""
+  - "Give 10% discount" → edit, targetRef=""
+  - "No more tax" → edit, targetRef=""
 
   IMPORTANT: "Invoice Priya ₹50,000" has no modification intent → "new"
   IMPORTANT: "Credit note for Priya ₹5,000 due to revision in last invoice" → "new"
@@ -405,18 +436,21 @@ DISAMBIGUATION EXAMPLES:
 "Invoice Priya ₹50,000 no GST" → new
 "Invoice Rahul ₹1,00,000 — 40% design, 60% development" → new (single invoice, 2 line items)
 "Add hosting fees in last invoice" → edit, targetRef = last invoice client/number
-"No more gst" → edit (remove GST from last invoice in session)
-"No more tax" → edit (remove tax from last invoice)
-"Get rid of gst" → edit
-"Take off the gst" → edit
-"Turn off gst" → edit
-"Zero gst please" → edit
-"Give 10 percent off" → edit (apply discount — NEVER new, no client or amount)
-"10 percent off" → edit
-"Give me 15% discount" → edit
-"Give 20% off" → edit
-"Make payment terms 45 days" → edit
-"Bump up gst to 18%" → edit
+"No more gst" → edit, targetRef=""
+"No more tax" → edit, targetRef=""
+"Get rid of gst" → edit, targetRef=""
+"Take off the gst" → edit, targetRef=""
+"Turn off gst" → edit, targetRef=""
+"Zero gst please" → edit, targetRef=""
+"Add 10% VAT" → edit, targetRef=""
+"Add VAT" → edit, targetRef=""
+"Remove GST" → edit, targetRef=""
+"Give 10 percent off" → edit, targetRef=""
+"10 percent off" → edit, targetRef=""
+"Give me 15% discount" → edit, targetRef=""
+"Give 20% off" → edit, targetRef=""
+"Make payment terms 45 days" → edit, targetRef=""
+"Bump up gst to 18%" → edit, targetRef=""
 "Can you remove the brand strategy" → edit
 "Please remove hosting" → edit
 "Kindly delete the last line item" → edit
@@ -473,6 +507,7 @@ Also output:
 - clientName: the DESTINATION client name (e.g. for "copy Rahul's for Priya" → clientName="Priya")
 - targetRef: for copy, the SOURCE client (e.g. for "copy Rahul's for Priya" → targetRef="Rahul")
   for edit, the invoice being edited (client name or INV number)
+  for edit with NO client name in prompt → targetRef="" always
 - For "same invoice but for June" with no explicit source client → targetRef="" (copier will use last session invoice)`
   );
 

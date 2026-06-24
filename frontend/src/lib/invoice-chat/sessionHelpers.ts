@@ -1,61 +1,99 @@
 import { SessionInvoice } from "@/components/invoice/InvoicePanel";
 
+export const SESSION_LIMIT = 30;
+const RECENT_FULL_DETAIL = 10;
+
 export function buildSessionContext(invoices: SessionInvoice[]): string {
   if (invoices.length === 0) return "No existing invoices in this session.";
 
-  return invoices
-    .map((si, index) => {
-      const inv = si.invoice;
-      const isMostRecent = index === invoices.length - 1;
-      const symbol =
-        inv.currency === "USD" ? "$" : inv.currency === "EUR" ? "€" : "₹";
+  // Hard cap at 30 — slice from the end to keep most recent
+  const capped = invoices.slice(-SESSION_LIMIT);
 
-      const lineItemsStr =
-        inv.lineItems
-          ?.map(
-            (item) =>
-              `  - ${item.description} | Qty: ${item.quantity} ${
-                item.unit
-              } | Rate: ${symbol}${item.rate.toLocaleString(
-                "en-IN"
-              )} | Amount: ${symbol}${item.amount.toLocaleString("en-IN")}`
-          )
-          .join("\n") ?? "  - (no line items)";
+  // Split: older invoices get compact, recent 10 get full detail
+  const older = capped.slice(0, -RECENT_FULL_DETAIL);
+  const recent = capped.slice(-RECENT_FULL_DETAIL);
 
-      // ── Discount line — only emit when a discount is actually applied ──
-      const hasDiscount =
-        inv.discountType &&
-        inv.discountType !== "none" &&
-        (inv.discountValue ?? 0) > 0;
-      const discountLine = hasDiscount
-        ? `Discount: ${inv.discountType} ${inv.discountValue}${
-            inv.discountType === "percent" ? "%" : ""
-          }`
-        : "";
+  const parts: string[] = [];
 
-      return [
-        `Invoice Ref: ${si.invoiceNumber ?? "Draft"}${
-          isMostRecent ? " [MOST RECENT]" : ""
-        }`,
-        `Client: ${inv.clientName}`,
-        `Currency: ${inv.currency ?? "INR"}`,
-        `Invoice Month: ${inv.invoiceMonth ?? ""}`,
-        inv.currency === "INR"
-          ? `GST: ${inv.gstPercent}% ${inv.gstType ?? "CGST_SGST"}`
-          : `Tax: ${inv.taxPercent ?? 0}% ${
-              inv.taxLabel || (inv.currency === "EUR" ? "VAT" : "Tax")
-            }`,
-        `Payment Terms: ${inv.paymentTermsDays} days`,
-        discountLine, // ← empty string filtered out below
-        `Subtotal: ${symbol}${inv.subtotal?.toLocaleString("en-IN")}`,
-        `Total: ${symbol}${inv.total.toLocaleString("en-IN")}`,
-        `Line Items:\n${lineItemsStr}`,
-        inv.notes ? `Notes: ${inv.notes}` : "",
-      ]
-        .filter(Boolean)
-        .join("\n");
-    })
-    .join("\n---\n");
+  // ── Compact summary for older invoices ──
+  if (older.length > 0) {
+    const compactLines = older
+      .map((si) => {
+        const inv = si.invoice;
+        const symbol =
+          inv.currency === "USD" ? "$" : inv.currency === "EUR" ? "€" : "₹";
+        return `${si.invoiceNumber ?? "Draft"} | ${
+          inv.clientName
+        } | ${symbol}${inv.total.toLocaleString("en-IN")} | ${
+          si.status ?? "draft"
+        }`;
+      })
+      .join("\n");
+
+    parts.push(
+      `[OLDER INVOICES — compact summary, limited detail]\n${compactLines}\n[END OLDER INVOICES]`
+    );
+  }
+
+  // ── Full detail for recent 10 invoices ──
+  const recentBlocks = recent.map((si, index) => {
+    const inv = si.invoice;
+    const isMostRecent = index === recent.length - 1;
+    const symbol =
+      inv.currency === "USD" ? "$" : inv.currency === "EUR" ? "€" : "₹";
+
+    const lineItemsStr =
+      inv.lineItems
+        ?.map(
+          (item) =>
+            `  - ${item.description} | Qty: ${item.quantity} ${
+              item.unit
+            } | Rate: ${symbol}${item.rate.toLocaleString(
+              "en-IN"
+            )} | Amount: ${symbol}${item.amount.toLocaleString("en-IN")}`
+        )
+        .join("\n") ?? "  - (no line items)";
+
+    const hasDiscount =
+      inv.discountType &&
+      inv.discountType !== "none" &&
+      (inv.discountValue ?? 0) > 0;
+
+    const discountLine = hasDiscount
+      ? `Discount: ${inv.discountType} ${inv.discountValue}${
+          inv.discountType === "percent" ? "%" : ""
+        }`
+      : "";
+
+    return [
+      `Invoice Ref: ${si.invoiceNumber ?? "Draft"}${
+        isMostRecent ? " [MOST RECENT]" : ""
+      }`,
+      `Client: ${inv.clientName}`,
+      `Currency: ${inv.currency ?? "INR"}`,
+      `Invoice Month: ${inv.invoiceMonth ?? ""}`,
+      // ── isTaxInclusive flag ──
+      // When true, the stated total already includes tax.
+      // editorNode reads this to back-calculate instead of adding tax on top.
+      inv.isTaxInclusive ? `Tax Inclusive: true` : "",
+      inv.currency === "INR"
+        ? `GST: ${inv.gstPercent}% ${inv.gstType ?? "CGST_SGST"}`
+        : `Tax: ${inv.taxPercent ?? 0}% ${
+            inv.taxLabel || (inv.currency === "EUR" ? "VAT" : "Tax")
+          }`,
+      `Payment Terms: ${inv.paymentTermsDays} days`,
+      discountLine,
+      `Subtotal: ${symbol}${inv.subtotal?.toLocaleString("en-IN")}`,
+      `Total: ${symbol}${inv.total.toLocaleString("en-IN")}`,
+      `Line Items:\n${lineItemsStr}`,
+      inv.notes ? `Notes: ${inv.notes}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  });
+
+  parts.push(recentBlocks.join("\n---\n"));
+  return parts.join("\n---\n");
 }
 
 export function findMatchingInvoices(
