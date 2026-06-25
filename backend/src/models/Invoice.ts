@@ -45,6 +45,8 @@ export interface IInvoiceDocument extends Document {
   dueDate: Date;
   currency?: "INR" | "USD" | "EUR";
   idempotencyKey: string;
+  remindersSent: number[];
+  lastReminderAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -127,6 +129,8 @@ const invoiceSchema = new Schema<IInvoiceDocument>(
       sparse: true,
       index: true,
     },
+    remindersSent: { type: [Number], default: [] },
+    lastReminderAt: { type: Date, default: null },
   },
   { timestamps: true }
 );
@@ -135,6 +139,10 @@ const invoiceSchema = new Schema<IInvoiceDocument>(
 invoiceSchema.index({ userId: 1, clientName: 1, status: 1, createdAt: -1 });
 invoiceSchema.index({ userId: 1, clientId: 1, status: 1, createdAt: -1 });
 invoiceSchema.index({ userId: 1, invoiceMonth: 1 });
+// ── Reminder index ──
+// Speeds up the daily cron query that finds all sent/overdue invoices
+// with a dueDate in the past — runs every day across all users.
+invoiceSchema.index({ status: 1, dueDate: 1 });
 
 export const Invoice = mongoose.model<IInvoiceDocument>(
   "Invoice",
