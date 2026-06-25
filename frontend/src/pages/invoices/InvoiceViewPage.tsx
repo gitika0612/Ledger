@@ -828,9 +828,9 @@ export function InvoiceViewPage() {
                   {Math.abs(daysUntilDue)} day
                   {Math.abs(daysUntilDue) !== 1 ? "s" : ""}.
                 </p>
-                <Button className="mt-3 w-full rounded-xl text-xs bg-red-500 hover:bg-red-600">
+                {/* <Button className="mt-3 w-full rounded-xl text-xs bg-red-500 hover:bg-red-600">
                   Send Reminder
-                </Button>
+                </Button> */}
               </div>
             )}
           </div>
