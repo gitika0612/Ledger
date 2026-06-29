@@ -101,7 +101,8 @@ async function processReminders(
       // Check each reminder day in order (1, 3, 7)
       // Send the first one that is due and hasn't been sent yet
       const reminderDayToSend = REMINDER_DAYS.find(
-        (day) => daysOverdue >= day && !invoice.remindersSent.includes(day)
+        (day) =>
+          daysOverdue >= day && !(invoice.remindersSent ?? []).includes(day)
       );
 
       if (!reminderDayToSend) {
@@ -187,6 +188,7 @@ export async function runScheduledReminders(): Promise<{
   results: Record<string, { sent: number; skipped: number; errors: number }>;
 }> {
   const currencies = getCurrenciesAt10AM();
+  // const currencies = ["INR"]; // TEMP FOR TESTING
 
   if (currencies.length === 0) {
     console.log("⏭️ No currencies at 10 AM right now — skipping");
