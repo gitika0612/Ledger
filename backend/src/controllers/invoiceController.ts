@@ -259,6 +259,16 @@ export async function getUserInvoices(
     return;
   }
   try {
+    // ── Auto-mark overdue ──
+    // Any sent invoice whose due date has passed → overdue.
+    // Runs on every fetch so status is always accurate without waiting for cron.
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    await Invoice.updateMany(
+      { userId, status: "sent", dueDate: { $lt: today } },
+      { $set: { status: "overdue" } }
+    );
+
     const invoices = await Invoice.find({ userId }).sort({ createdAt: -1 });
     res.status(200).json({ success: true, invoices });
   } catch (err) {
@@ -464,6 +474,14 @@ export async function getInvoiceById(
 ): Promise<void> {
   const { id } = req.params;
   try {
+    // ── Auto-mark overdue ──
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    await Invoice.findOneAndUpdate(
+      { _id: id, status: "sent", dueDate: { $lt: today } },
+      { $set: { status: "overdue" } }
+    );
+
     const invoice = await Invoice.findById(id).lean();
     if (!invoice) {
       res.status(404).json({ error: "Invoice not found" });
@@ -492,32 +510,4 @@ export async function getLatestClientInvoice(req: Request, res: Response) {
 
   if (!invoice) return res.status(404).json({ error: "Not found" });
   res.json(invoice);
-}
-
-// ── Send overdue reminders (called by Render Cron Job) ──
-// Single cron job runs every hour (0 * * * *).
-// reminderService auto-detects which currencies are at 10 AM right now
-// based on CURRENCY_TIMEZONES map — no currency param needed.
-// Adding a new currency in future = 1 line in CURRENCY_TIMEZONES map.
-export async function sendOverdueReminders(
-  req: Request,
-  res: Response
-): Promise<void> {
-  // ── Auth check ──
-  const secret = req.query.secret as string;
-  if (!secret || secret !== process.env.CRON_SECRET) {
-    res.status(401).json({ error: "Unauthorized" });
-    return;
-  }
-
-  console.log("🕐 Cron triggered: sendOverdueReminders");
-
-  try {
-    const result = await runScheduledReminders();
-    console.log("✅ Reminders done:", result);
-    res.status(200).json({ success: true, ...result });
-  } catch (err) {
-    console.error("❌ Reminder cron error:", err);
-    res.status(500).json({ error: "Failed to process reminders" });
-  }
 }

@@ -754,11 +754,18 @@ export function InvoiceListPage() {
           onClose={() => setSendingInvoice(null)}
           onSent={() => {
             setInvoices((prev) =>
-              prev.map((inv) =>
-                inv._id === sendingInvoice._id
-                  ? { ...inv, status: "sent" }
-                  : inv
-              )
+              prev.map((inv) => {
+                if (inv._id === sendingInvoice._id) {
+                  const today = new Date();
+                  today.setHours(0, 0, 0, 0);
+                  const dueDate = new Date(inv.dueDate);
+                  dueDate.setHours(0, 0, 0, 0);
+                  // If due date already passed → overdue, otherwise → sent
+                  const newStatus = dueDate < today ? "overdue" : "sent";
+                  return { ...inv, status: newStatus };
+                }
+                return inv;
+              })
             );
             setSendingInvoice(null);
           }}

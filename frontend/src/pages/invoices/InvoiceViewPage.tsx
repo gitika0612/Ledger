@@ -850,7 +850,14 @@ export function InvoiceViewPage() {
           }}
           onClose={() => setShowSendModal(false)}
           onSent={() => {
-            setInvoice((prev) => (prev ? { ...prev, status: "sent" } : prev));
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            const dueDate = new Date(invoice.dueDate);
+            dueDate.setHours(0, 0, 0, 0);
+            const newStatus = dueDate < today ? "overdue" : "sent";
+            setInvoice((prev) =>
+              prev ? { ...prev, status: newStatus } : prev
+            );
             setShowSendModal(false);
           }}
         />
