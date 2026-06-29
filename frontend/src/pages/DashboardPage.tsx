@@ -13,27 +13,19 @@ import {
   Settings,
   ChevronRight,
   TrendingUp,
-  // Clock,
-  // AlertCircle,
-  // CheckCircle2,
+  Clock,
+  AlertCircle,
+  CheckCircle2,
   X,
   AlertTriangle,
 } from "lucide-react";
-import { fetchDashboardStats } from "@/lib/api/invoiceApi";
+import { fetchDashboardStats, RecentInvoice } from "@/lib/api/invoiceApi";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { formatCurrency } from "@/lib/currency";
-
-interface RecentInvoice {
-  _id: string;
-  invoiceNumber: string;
-  clientName: string;
-  total: number;
-  currency?: "INR" | "USD" | "EUR";
-  status: "draft" | "confirmed" | "sent" | "paid" | "overdue";
-}
+import { getExchangeRates, sumInUSD } from "@/lib/exchangeRates";
 
 const NAV_ITEMS = [
   {
@@ -107,8 +99,8 @@ export function DashboardPage() {
   const [collapsed, setCollapsed] = useState(false);
   const [stats, setStats] = useState({
     totalInvoices: 0,
-    pendingAmount: 0,
-    paidThisMonth: 0,
+    pendingUSD: 0,
+    paidUSD: 0,
     overdueCount: 0,
   });
   const [recentInvoices, setRecentInvoices] = useState<RecentInvoice[]>([]);
@@ -124,51 +116,55 @@ export function DashboardPage() {
       color: "text-indigo-600",
       bg: "bg-indigo-50",
     },
-    // {
-    //   label: "Pending Payment",
-    //   value: statsLoading
-    //     ? "..."
-    //     : `₹${stats.pendingAmount.toLocaleString("en-IN")}`,
-    //   sub: "Outstanding",
-    //   icon: Clock,
-    //   color: "text-amber-600",
-    //   bg: "bg-amber-50",
-    // },
-    // {
-    //   label: "Paid This Month",
-    //   value: statsLoading
-    //     ? "..."
-    //     : `₹${stats.paidThisMonth.toLocaleString("en-IN")}`,
-    //   sub: new Date().toLocaleString("en-IN", {
-    //     month: "long",
-    //     year: "numeric",
-    //   }),
-    //   icon: CheckCircle2,
-    //   color: "text-emerald-600",
-    //   bg: "bg-emerald-50",
-    // },
-    // {
-    //   label: "Overdue",
-    //   value: statsLoading ? "..." : stats.overdueCount.toString(),
-    //   sub: "Needs attention",
-    //   icon: AlertCircle,
-    //   color: "text-red-500",
-    //   bg: "bg-red-50",
-    // },
+    {
+      label: "Pending Payment",
+      value: statsLoading ? "..." : formatCurrency(stats.pendingUSD, "USD"),
+      sub: "Outstanding · in USD",
+      icon: Clock,
+      color: "text-amber-600",
+      bg: "bg-amber-50",
+    },
+    {
+      label: "Paid This Month",
+      value: statsLoading ? "..." : formatCurrency(stats.paidUSD, "USD"),
+      sub:
+        new Date().toLocaleString("en-IN", {
+          month: "long",
+          year: "numeric",
+        }) + " · in USD",
+      icon: CheckCircle2,
+      color: "text-emerald-600",
+      bg: "bg-emerald-50",
+    },
+    {
+      label: "Overdue",
+      value: statsLoading ? "..." : stats.overdueCount.toString(),
+      sub: "Needs attention",
+      icon: AlertCircle,
+      color: "text-red-500",
+      bg: "bg-red-50",
+    },
   ];
 
   useEffect(() => {
     if (!isLoaded || !user) return;
     syncUser();
 
-    // Check onboarding status + fetch stats in parallel
-    Promise.all([getUserProfile(), fetchDashboardStats(user.id)])
-      .then(([profile, data]) => {
-        // Show banner if not onboarded
+    Promise.all([
+      getUserProfile(),
+      fetchDashboardStats(user.id),
+      getExchangeRates(),
+    ])
+      .then(([profile, data, rates]) => {
         if (!profile?.isOnboarded) {
           setShowOnboardingBanner(true);
         }
-        setStats(data.stats);
+        setStats({
+          totalInvoices: data.stats.totalInvoices,
+          pendingUSD: sumInUSD(data.stats.pendingByCurrency, rates),
+          paidUSD: sumInUSD(data.stats.paidByCurrency, rates),
+          overdueCount: data.stats.overdueCount,
+        });
         setRecentInvoices(data.recentInvoices);
       })
       .catch(console.error)

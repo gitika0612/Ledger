@@ -403,8 +403,8 @@ export async function getDashboardStats(
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const [
       totalInvoices,
-      pendingAmount,
-      paidThisMonth,
+      pendingByCurrency,
+      paidByCurrency,
       overdueCount,
       recentInvoices,
     ] = await Promise.all([
@@ -413,10 +413,10 @@ export async function getDashboardStats(
         {
           $match: {
             userId: clerkId,
-            status: { $in: ["draft", "confirmed", "sent"] },
+            status: { $in: ["draft", "confirmed", "sent", "paid", "overdue"] },
           },
         },
-        { $group: { _id: null, total: { $sum: "$total" } } },
+        { $group: { _id: "$currency", total: { $sum: "$total" } } },
       ]),
       Invoice.aggregate([
         {
@@ -426,17 +426,18 @@ export async function getDashboardStats(
             updatedAt: { $gte: startOfMonth },
           },
         },
-        { $group: { _id: null, total: { $sum: "$total" } } },
+        { $group: { _id: "$currency", total: { $sum: "$total" } } },
       ]),
       Invoice.countDocuments({ userId: clerkId, status: "overdue" }),
       Invoice.find({ userId: clerkId }).sort({ createdAt: -1 }).limit(5).lean(),
     ]);
+
     res.status(200).json({
       success: true,
       stats: {
         totalInvoices,
-        pendingAmount: pendingAmount[0]?.total || 0,
-        paidThisMonth: paidThisMonth[0]?.total || 0,
+        pendingByCurrency,
+        paidByCurrency,
         overdueCount,
       },
       recentInvoices,
@@ -446,7 +447,6 @@ export async function getDashboardStats(
     res.status(500).json({ error: "Failed to fetch stats" });
   }
 }
-
 // ── Delete invoice ──
 export async function removeInvoice(
   req: Request,

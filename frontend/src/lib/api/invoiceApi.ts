@@ -66,6 +66,31 @@ export interface PendingStateContext {
   resolvedDestinationName?: string;
 }
 
+export interface RecentInvoice {
+  _id: string;
+  invoiceNumber: string;
+  clientName: string;
+  total: number;
+  currency?: "INR" | "USD" | "EUR";
+  status: "draft" | "confirmed" | "sent" | "paid" | "overdue";
+}
+
+interface CurrencyTotal {
+  _id: string;
+  total: number;
+}
+
+interface DashboardStatsResponse {
+  success: boolean;
+  stats: {
+    totalInvoices: number;
+    pendingByCurrency: CurrencyTotal[];
+    paidByCurrency: CurrencyTotal[];
+    overdueCount: number;
+  };
+  recentInvoices: RecentInvoice[];
+}
+
 export async function parseInvoiceWithAI(
   prompt: string,
   userId?: string,
@@ -160,7 +185,9 @@ export async function getUserInvoices(userId: string) {
   return response.data.invoices;
 }
 
-export async function fetchDashboardStats(userId: string) {
+export async function fetchDashboardStats(
+  userId: string
+): Promise<DashboardStatsResponse> {
   const response = await api.get("/invoices/dashboard-stats", {
     headers: { "x-clerk-id": userId },
   });

@@ -38,7 +38,7 @@ function formatAmount(
       maximumFractionDigits: 0,
     }).format(amount);
   if (currency === "EUR")
-    return new Intl.NumberFormat("de-DE", {
+    return new Intl.NumberFormat("en-IE", {
       style: "currency",
       currency: "EUR",
       maximumFractionDigits: 0,
