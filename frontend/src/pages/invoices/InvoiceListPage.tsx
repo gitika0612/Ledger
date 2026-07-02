@@ -198,7 +198,7 @@ export function InvoiceListPage() {
     if (!isLoaded || !user) return;
     (async () => {
       try {
-        const data = await getUserInvoices(user.id);
+        const data = await getUserInvoices();
         setInvoices(data);
       } catch (err) {
         console.error("Failed to fetch invoices:", err);
@@ -303,7 +303,7 @@ export function InvoiceListPage() {
     );
 
     if (user && data.clientName) {
-      await updateClientByName(user.id, data.clientName, {
+      await updateClientByName(data.clientName, {
         email: data.clientEmail,
         address: data.clientAddress,
         city: data.clientCity,
@@ -319,7 +319,7 @@ export function InvoiceListPage() {
     let invoiceWithClient: Invoice = { ...inv };
     if (inv.clientName && user) {
       try {
-        const client = await getClientByName(user.id, inv.clientName);
+        const client = await getClientByName(inv.clientName);
         if (client) {
           invoiceWithClient = {
             ...invoiceWithClient,

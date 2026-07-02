@@ -35,7 +35,6 @@ export function useAuth() {
     if (!user) return;
     try {
       await api.post("/users/sync", {
-        clerkId: user.id,
         email: user.primaryEmailAddress?.emailAddress || "",
         firstName: user.firstName || "",
         lastName: user.lastName || "",
@@ -49,9 +48,7 @@ export function useAuth() {
   const getUserProfile = useCallback(async (): Promise<UserProfile | null> => {
     if (!user) return null;
     try {
-      const response = await api.get("/users/profile", {
-        headers: { "x-clerk-id": user.id },
-      });
+      const response = await api.get("/users/profile");
       return response.data.profile;
     } catch (err) {
       console.error("Get profile failed:", err);
@@ -63,9 +60,7 @@ export function useAuth() {
     async (profile: Partial<UserProfile>): Promise<UserProfile | null> => {
       if (!user) return null;
       try {
-        const response = await api.put("/users/profile", profile, {
-          headers: { "x-clerk-id": user.id },
-        });
+        const response = await api.put("/users/profile", profile);
         return response.data.profile;
       } catch (err) {
         console.error("Update profile failed:", err);

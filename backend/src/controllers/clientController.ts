@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import { getAuth } from "@clerk/express";
 import { Client } from "../models/Client";
 
 // ── Get all clients for a user ──
@@ -6,12 +7,7 @@ export async function getUserClients(
   req: Request,
   res: Response
 ): Promise<void> {
-  const userId = req.headers["x-clerk-id"] as string;
-
-  if (!userId) {
-    res.status(400).json({ error: "Missing user ID" });
-    return;
-  }
+  const { userId } = getAuth(req);
 
   try {
     const clients = await Client.find({ userId }).sort({ createdAt: -1 });
@@ -28,10 +24,11 @@ export async function getClientById(
   res: Response
 ): Promise<void> {
   const { id } = req.params;
+  const { userId } = getAuth(req);
 
   try {
     const client = await Client.findById(id).lean();
-    if (!client) {
+    if (!client || client.userId !== userId) {
       res.status(404).json({ error: "Client not found" });
       return;
     }
@@ -44,12 +41,7 @@ export async function getClientById(
 
 // ── Create or update client (upsert by email) ──
 export async function upsertClient(req: Request, res: Response): Promise<void> {
-  const userId = req.headers["x-clerk-id"] as string;
-
-  if (!userId) {
-    res.status(400).json({ error: "Missing user ID" });
-    return;
-  }
+  const { userId } = getAuth(req);
 
   const { name, email, phone, address, city, state, pincode, gstin } = req.body;
 
@@ -87,11 +79,11 @@ export async function updateClientByName(
   req: Request,
   res: Response
 ): Promise<void> {
-  const userId = req.headers["x-clerk-id"] as string;
+  const { userId } = getAuth(req);
   const { name } = req.params;
 
-  if (!userId || !name) {
-    res.status(400).json({ error: "Missing user ID or name" });
+  if (!name) {
+    res.status(400).json({ error: "Missing name" });
     return;
   }
 
@@ -130,13 +122,8 @@ export async function getClientByName(
   req: Request,
   res: Response
 ): Promise<void> {
-  const userId = req.headers["x-clerk-id"] as string;
+  const { userId } = getAuth(req);
   const { name } = req.query;
-
-  if (!userId) {
-    res.status(400).json({ error: "Missing user ID" });
-    return;
-  }
 
   try {
     const client = await Client.findOne({
@@ -154,9 +141,10 @@ export async function getClientByName(
 // ── Delete client ──
 export async function deleteClient(req: Request, res: Response): Promise<void> {
   const { id } = req.params;
+  const { userId } = getAuth(req);
 
   try {
-    const client = await Client.findByIdAndDelete(id);
+    const client = await Client.findOneAndDelete({ _id: id, userId });
     if (!client) {
       res.status(404).json({ error: "Client not found" });
       return;
@@ -174,10 +162,10 @@ export async function parseClientDetails(
   req: Request,
   res: Response
 ): Promise<void> {
-  const userId = req.headers["x-clerk-id"] as string;
+  const { userId } = getAuth(req);
   const { text, clientName } = req.body;
 
-  if (!userId || !text || !clientName) {
+  if (!text || !clientName) {
     res.status(400).json({ error: "Missing required fields" });
     return;
   }

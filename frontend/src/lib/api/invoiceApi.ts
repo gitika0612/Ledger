@@ -93,14 +93,12 @@ interface DashboardStatsResponse {
 
 export async function parseInvoiceWithAI(
   prompt: string,
-  userId?: string,
   sessionContext?: string,
   currentInvoice?: ParsedInvoice | null,
   pendingState?: PendingStateContext | null
 ): Promise<AgentResult> {
   const response = await api.post("/invoices/parse", {
     prompt,
-    userId,
     sessionContext,
     currentInvoice,
     pendingState: pendingState || null,
@@ -110,16 +108,14 @@ export async function parseInvoiceWithAI(
 
 export async function saveDraftInvoice(
   invoice: ParsedInvoice,
-  userId: string,
   originalPrompt: string,
   clientId?: string
 ): Promise<SavedDraft> {
-  const idempotencyKey = `${userId}_${invoice.clientName}_${
+  const idempotencyKey = `${invoice.clientName}_${
     invoice.total
   }_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 
   const response = await api.post("/invoices/save", {
-    userId,
     clientName: invoice.clientName,
     currency: invoice.currency || "INR",
     lineItems: invoice.lineItems,
@@ -178,19 +174,13 @@ export async function updateInvoice(
   await api.put(`/invoices/${invoiceId}`, data);
 }
 
-export async function getUserInvoices(userId: string) {
-  const response = await api.get("/invoices", {
-    headers: { "x-clerk-id": userId },
-  });
+export async function getUserInvoices() {
+  const response = await api.get("/invoices");
   return response.data.invoices;
 }
 
-export async function fetchDashboardStats(
-  userId: string
-): Promise<DashboardStatsResponse> {
-  const response = await api.get("/invoices/dashboard-stats", {
-    headers: { "x-clerk-id": userId },
-  });
+export async function fetchDashboardStats(): Promise<DashboardStatsResponse> {
+  const response = await api.get("/invoices/dashboard-stats");
   return response.data;
 }
 

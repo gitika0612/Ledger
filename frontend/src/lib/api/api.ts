@@ -5,6 +5,21 @@ const api = axios.create({
   headers: { "Content-Type": "application/json" },
 });
 
+type TokenGetter = () => Promise<string | null>;
+let getToken: TokenGetter | null = null;
+
+export function setAuthTokenGetter(fn: TokenGetter) {
+  getToken = fn;
+}
+
+api.interceptors.request.use(async (config) => {
+  const token = await getToken?.();
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
 api.interceptors.response.use(
   (response) => response,
   (error) => {

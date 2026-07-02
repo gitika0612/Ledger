@@ -9,9 +9,20 @@ const counterSchema = new mongoose.Schema({
 const Counter =
   mongoose.models["Counter"] || mongoose.model("Counter", counterSchema);
 
-export async function generateInvoiceNumber(): Promise<string> {
+// ── Per-user invoice numbering ──
+// Each user has their own INV-<year>-<seq> sequence, tracked by a Counter
+// document scoped to `invoices_${userId}_${year}`. The first time we
+// generate a number for a given user+year, we lazily seed the counter from
+// that user's own existing invoices (never another user's), then increment
+// normally on every call after that.
+export async function generateInvoiceNumber(userId: string): Promise<string> {
   const year = new Date().getFullYear();
-  const counterId = `invoices_${year}`;
+  const counterId = `invoices_${userId}_${year}`;
+
+  const existing = await Counter.findById(counterId).lean();
+  if (!existing) {
+    await seedCounterFromExistingInvoices(userId, year, counterId);
+  }
 
   const counter = await Counter.findOneAndUpdate(
     { _id: counterId },
@@ -23,14 +34,18 @@ export async function generateInvoiceNumber(): Promise<string> {
   return `INV-${year}-${number}`;
 }
 
-export async function syncInvoiceCounter(): Promise<void> {
-  const year = new Date().getFullYear();
+async function seedCounterFromExistingInvoices(
+  userId: string,
+  year: number,
+  counterId: string
+): Promise<void> {
   const prefix = `INV-${year}-`;
-  const counterId = `invoices_${year}`;
 
   try {
-    // Find highest existing invoice number this year
+    // Find this user's highest existing invoice number this year — scoped
+    // strictly to userId so one user's history never bleeds into another's.
     const latest = await Invoice.findOne({
+      userId,
       invoiceNumber: { $regex: `^${prefix}` },
     })
       .sort({ invoiceNumber: -1 })
@@ -46,14 +61,14 @@ export async function syncInvoiceCounter(): Promise<void> {
       { $max: { seq: currentMax } }, // only updates if currentMax > existing seq
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
-
-    console.log(`✅ Invoice counter synced: ${counterId} → ${currentMax}`);
   } catch (err: any) {
     // If duplicate key on counter itself — it already exists, that's fine
     if (err.code === 11000) {
-      console.log(`✅ Invoice counter already exists for ${counterId}`);
       return;
     }
-    console.error("❌ Failed to sync invoice counter:", err.message);
+    console.error(
+      `❌ Failed to seed invoice counter for ${counterId}:`,
+      err.message
+    );
   }
 }

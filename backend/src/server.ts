@@ -1,7 +1,9 @@
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
+import { clerkMiddleware } from "@clerk/express";
 import { connectDB } from "./config/db";
+import { requireAuth } from "./middleware/requireAuth";
 import webhookRoutes from "./routes/webhooks";
 import userRoutes from "./routes/users";
 import invoiceRoutes from "./routes/invoices";
@@ -40,12 +42,13 @@ app.use(
   })
 );
 app.use(express.json());
+app.use(clerkMiddleware());
 
 app.use("/api/webhooks", webhookRoutes);
-app.use("/api/users", userRoutes);
-app.use("/api/invoices", invoiceRoutes);
-app.use("/api/chats", chatRoutes);
-app.use("/api/clients", clientRoutes);
+app.use("/api/users", requireAuth, userRoutes);
+app.use("/api/invoices", requireAuth, invoiceRoutes);
+app.use("/api/chats", requireAuth, chatRoutes);
+app.use("/api/clients", requireAuth, clientRoutes);
 app.use("/api/payments", paymentRoutes);
 
 app.get("/api/health", (_req, res) => {

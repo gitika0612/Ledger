@@ -113,7 +113,7 @@ export function SendInvoiceModal({
       try {
         const [profile, client] = await Promise.all([
           getUserProfile(),
-          getClientByName(user.id, clientName).catch(() => null),
+          getClientByName(clientName).catch(() => null),
         ]);
 
         if (cancelled) return;
@@ -161,11 +161,10 @@ export function SendInvoiceModal({
         profile
       );
 
-      await api.post(
-        `/invoices/${invoiceId}/send`,
-        { pdfBase64, clientEmail: emailToUse.trim() },
-        { headers: { "x-clerk-id": user.id } }
-      );
+      await api.post(`/invoices/${invoiceId}/send`, {
+        pdfBase64,
+        clientEmail: emailToUse.trim(),
+      });
 
       setClientEmail(emailToUse.trim());
       setModalState("sent");

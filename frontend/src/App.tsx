@@ -11,6 +11,7 @@ import { OnboardingPage } from "./pages/OnboardingPage";
 import { Toaster } from "sonner";
 import { PaymentPage } from "./pages/payment/PaymentPage";
 import { PaymentSuccessPage } from "./pages/payment/PaymentSuccessPage";
+import { AuthTokenBridge } from "@/components/AuthTokenBridge";
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => (
   <>
@@ -24,6 +25,7 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => (
 export default function App() {
   return (
     <>
+      <AuthTokenBridge />
       <Toaster richColors position="top-right" />
       <Routes>
         <Route path="/" element={<Navigate to="/sign-in" replace />} />

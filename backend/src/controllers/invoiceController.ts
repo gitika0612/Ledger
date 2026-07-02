@@ -1,5 +1,6 @@
 /// <reference types="node" />
 import { Request, Response } from "express";
+import { getAuth } from "@clerk/express";
 import { Invoice } from "../models/Invoice";
 import { generateInvoiceNumber } from "../lib/invoiceHelper";
 import { runInvoiceAgent } from "../agents/invoiceAgent";
@@ -7,9 +8,9 @@ import { runScheduledReminders } from "../lib/reminderService";
 
 // ── Parse invoice (main AI endpoint) ──
 export async function parseInvoice(req: Request, res: Response): Promise<void> {
+  const { userId } = getAuth(req);
   const {
     prompt,
-    userId,
     sessionContext,
     memoryContext,
     currentInvoice,
@@ -68,8 +69,8 @@ export async function saveDraftInvoice(
   req: Request,
   res: Response
 ): Promise<void> {
+  const { userId } = getAuth(req);
   const {
-    userId,
     clientName,
     clientId,
     currency,
@@ -123,7 +124,7 @@ export async function saveDraftInvoice(
       }
     }
 
-    const invoiceNumber = await generateInvoiceNumber();
+    const invoiceNumber = await generateInvoiceNumber(userId);
     const terms = paymentTermsDays || 15;
     const resolvedInvoiceDate =
       invoiceDate && invoiceDate !== "" ? new Date(invoiceDate) : new Date();
@@ -229,9 +230,10 @@ export async function confirmInvoice(
   res: Response
 ): Promise<void> {
   const { id } = req.params;
+  const { userId } = getAuth(req);
   try {
     const invoice = await Invoice.findById(id);
-    if (!invoice) {
+    if (!invoice || invoice.userId !== userId) {
       res.status(404).json({ error: "Invoice not found" });
       return;
     }
@@ -253,11 +255,7 @@ export async function getUserInvoices(
   req: Request,
   res: Response
 ): Promise<void> {
-  const userId = req.headers["x-clerk-id"] as string;
-  if (!userId) {
-    res.status(400).json({ error: "Missing user ID" });
-    return;
-  }
+  const { userId } = getAuth(req);
   try {
     // ── Auto-mark overdue ──
     // Any sent invoice whose due date has passed → overdue.
@@ -283,9 +281,10 @@ export async function updateInvoice(
   res: Response
 ): Promise<void> {
   const { id } = req.params;
+  const { userId } = getAuth(req);
   try {
     const invoice = await Invoice.findById(id);
-    if (!invoice) {
+    if (!invoice || invoice.userId !== userId) {
       res.status(404).json({ error: "Invoice not found" });
       return;
     }
@@ -357,8 +356,8 @@ export async function getClientHistory(
   res: Response
 ): Promise<void> {
   const { clientName } = req.params;
-  const userId = req.headers["x-clerk-id"] as string;
-  if (!userId || !clientName) {
+  const { userId } = getAuth(req);
+  if (!clientName) {
     res.status(400).json({ error: "Missing required fields" });
     return;
   }
@@ -393,11 +392,7 @@ export async function getDashboardStats(
   req: Request,
   res: Response
 ): Promise<void> {
-  const clerkId = req.headers["x-clerk-id"] as string;
-  if (!clerkId) {
-    res.status(400).json({ error: "Missing clerk ID" });
-    return;
-  }
+  const { userId: clerkId } = getAuth(req);
   try {
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -453,13 +448,15 @@ export async function removeInvoice(
   res: Response
 ): Promise<void> {
   const { id } = req.params;
+  const { userId } = getAuth(req);
   try {
-    const invoice = await Invoice.findByIdAndDelete(id);
-    if (!invoice) {
+    const existing = await Invoice.findById(id);
+    if (!existing || existing.userId !== userId) {
       res.status(404).json({ error: "Invoice not found" });
       return;
     }
-    console.log(`✅ Deleted: ${invoice.invoiceNumber}`);
+    const invoice = await Invoice.findByIdAndDelete(id);
+    console.log(`✅ Deleted: ${invoice?.invoiceNumber}`);
     res.status(200).json({ success: true });
   } catch (err) {
     console.error("❌ Delete error:", err);
@@ -473,6 +470,7 @@ export async function getInvoiceById(
   res: Response
 ): Promise<void> {
   const { id } = req.params;
+  const { userId } = getAuth(req);
   try {
     // ── Auto-mark overdue ──
     const today = new Date();
@@ -483,7 +481,7 @@ export async function getInvoiceById(
     );
 
     const invoice = await Invoice.findById(id).lean();
-    if (!invoice) {
+    if (!invoice || invoice.userId !== userId) {
       res.status(404).json({ error: "Invoice not found" });
       return;
     }
@@ -499,7 +497,7 @@ export async function getInvoiceById(
 
 export async function getLatestClientInvoice(req: Request, res: Response) {
   const { clientName } = req.params;
-  const { userId } = req.query;
+  const { userId } = getAuth(req);
 
   const invoice = await Invoice.findOne({
     userId,

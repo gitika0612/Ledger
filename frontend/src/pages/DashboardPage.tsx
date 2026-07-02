@@ -152,7 +152,7 @@ export function DashboardPage() {
 
     Promise.all([
       getUserProfile(),
-      fetchDashboardStats(user.id),
+      fetchDashboardStats(),
       getExchangeRates(),
     ])
       .then(([profile, data, rates]) => {

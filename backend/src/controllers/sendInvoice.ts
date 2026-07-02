@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import { getAuth } from "@clerk/express";
 import { Invoice } from "../models/Invoice";
 import { User } from "../models/User";
 import { Client } from "../models/Client";
@@ -6,6 +7,7 @@ import { sendInvoiceEmail } from "../lib/emailService";
 
 export async function sendInvoice(req: Request, res: Response): Promise<void> {
   const { id } = req.params;
+  const { userId } = getAuth(req);
   const { pdfBase64, clientEmail: providedEmail } = req.body;
 
   if (!pdfBase64) {
@@ -16,7 +18,7 @@ export async function sendInvoice(req: Request, res: Response): Promise<void> {
   try {
     // ── 1. Fetch and validate invoice ──
     const invoice = await Invoice.findById(id).lean();
-    if (!invoice) {
+    if (!invoice || invoice.userId !== userId) {
       res.status(404).json({ error: "Invoice not found" });
       return;
     }

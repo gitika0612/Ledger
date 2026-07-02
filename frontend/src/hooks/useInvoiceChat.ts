@@ -207,7 +207,7 @@ export function useInvoiceChat() {
   };
 
   const loadMessagesForSession = useCallback(
-    async (userId: string, sessionId: string) => {
+    async (sessionId: string) => {
       setCurrentSessionId(sessionId);
       setLoadingMessages(true);
       setMessages([]);
@@ -217,7 +217,7 @@ export function useInvoiceChat() {
       setPending(null);
 
       try {
-        const msgs = await getSessionMessages(userId, sessionId);
+        const msgs = await getSessionMessages(sessionId);
         if (msgs.length === 0) {
           setMessages([WELCOME]);
         } else {
@@ -293,14 +293,14 @@ export function useInvoiceChat() {
   const loadSessions = async () => {
     if (!user) return;
     try {
-      const data = await getUserChatSessions(user.id);
+      const data = await getUserChatSessions();
       setSessions(data);
       if (isInitialLoadRef.current) {
         isInitialLoadRef.current = false;
         const savedId = localStorage.getItem(`ledger_session_${user.id}`);
         if (savedId) {
           const session = data.find((s) => s._id === savedId);
-          if (session) await loadMessagesForSession(user.id, session._id);
+          if (session) await loadMessagesForSession(session._id);
         }
       }
     } catch (err) {
@@ -313,7 +313,7 @@ export function useInvoiceChat() {
   const ensureSession = async (): Promise<string> => {
     if (currentSessionId) return currentSessionId;
     if (!user) throw new Error("No user");
-    const session = await createChatSession(user.id);
+    const session = await createChatSession();
     setSessions((prev) => [session, ...prev]);
     setCurrentSessionId(session._id);
     return session._id;
@@ -325,7 +325,6 @@ export function useInvoiceChat() {
   ): Promise<ChatMessageAPI> => {
     if (!user) throw new Error("No user");
     const saved = await addChatMessage(
-      user.id,
       sessionId,
       "assistant",
       content
@@ -370,7 +369,6 @@ export function useInvoiceChat() {
     try {
       savedDraft = await saveDraftInvoice(
         finalInvoice,
-        user.id,
         originalPrompt,
         client?._id
       );
@@ -383,7 +381,6 @@ export function useInvoiceChat() {
       : `Invoice draft ready for **${finalInvoice.clientName}**. Review it in the side panel.`;
 
     const savedMsg = await addChatMessage(
-      user.id,
       sessionId,
       "assistant",
       content,
@@ -947,7 +944,6 @@ export function useInvoiceChat() {
       const sessionContext = buildSessionContext(sessionInvoicesRef.current);
       const result = await parseInvoiceWithAI(
         current.originalPrompt,
-        user.id,
         sessionContext,
         null,
         {
@@ -969,7 +965,6 @@ export function useInvoiceChat() {
       const sessionContext = buildSessionContext(sessionInvoicesRef.current);
       const overrideResult = await parseInvoiceWithAI(
         reply,
-        user.id,
         sessionContext,
         current.invoice,
         {
@@ -1129,7 +1124,6 @@ export function useInvoiceChat() {
 
     const result = await parseInvoiceWithAI(
       reply,
-      user.id,
       sessionContext,
       current.invoice || null,
       {
@@ -1191,7 +1185,6 @@ export function useInvoiceChat() {
       const resolvedName = current.clientName ?? "";
       try {
         const parsed = await parseClientDetailsFromText(
-          user.id,
           rawDetails,
           current.clientName!
         );
@@ -1343,7 +1336,6 @@ export function useInvoiceChat() {
       setLoadingSessionId(sessionId);
 
       const savedUserMsg = await addChatMessage(
-        user.id,
         sessionId,
         "user",
         prompt
@@ -1382,7 +1374,6 @@ export function useInvoiceChat() {
       if (sessionInvoicesRef.current.length >= SESSION_LIMIT) {
         const result = await parseInvoiceWithAI(
           prompt,
-          user.id,
           sessionContext
         );
 
@@ -1403,7 +1394,7 @@ export function useInvoiceChat() {
       }
 
       // ── Normal flow (under session limit) ──
-      const result = await parseInvoiceWithAI(prompt, user.id, sessionContext);
+      const result = await parseInvoiceWithAI(prompt, sessionContext);
       await handleAgentResult(result, sessionId, prompt);
       loadSessions();
     } catch (err) {
@@ -1466,7 +1457,6 @@ export function useInvoiceChat() {
         si.invoice.currency
       )}**.`;
       const savedMsg = await addChatMessage(
-        user.id,
         currentSessionId,
         "assistant",
         confirmContent
@@ -1538,7 +1528,7 @@ export function useInvoiceChat() {
   const handleNewChat = async () => {
     if (!user) return;
     try {
-      const session = await createChatSession(user.id);
+      const session = await createChatSession();
       setSessions((prev) => [session, ...prev]);
       setCurrentSessionId(session._id);
       setMessages([WELCOME]);
@@ -1559,7 +1549,7 @@ export function useInvoiceChat() {
     e.stopPropagation();
     if (!user) return;
     try {
-      await deleteChatSession(user.id, sessionId);
+      await deleteChatSession(sessionId);
       setSessions((prev) => prev.filter((s) => s._id !== sessionId));
       if (currentSessionId === sessionId) {
         setCurrentSessionId(null);
@@ -1577,7 +1567,7 @@ export function useInvoiceChat() {
 
   const handleLoadSession = async (session: ChatSessionAPI) => {
     if (!user) return;
-    await loadMessagesForSession(user.id, session._id);
+    await loadMessagesForSession(session._id);
   };
 
   const scrollToMessage = (messageId: string) => {

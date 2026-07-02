@@ -1,9 +1,11 @@
 /// <reference types="node" />
 import { Request, Response } from "express";
+import { getAuth } from "@clerk/express";
 import { User } from "../models/User";
 
 export async function syncUser(req: Request, res: Response): Promise<void> {
-  const { clerkId, email, firstName, lastName, imageUrl } = req.body;
+  const { userId: clerkId } = getAuth(req);
+  const { email, firstName, lastName, imageUrl } = req.body;
 
   if (!clerkId || !email) {
     res.status(400).json({ error: "clerkId and email are required" });
@@ -34,12 +36,7 @@ export async function syncUser(req: Request, res: Response): Promise<void> {
 }
 
 export async function getMe(req: Request, res: Response): Promise<void> {
-  const clerkId = req.headers["x-clerk-id"] as string;
-
-  if (!clerkId) {
-    res.status(400).json({ error: "Missing clerk ID" });
-    return;
-  }
+  const { userId: clerkId } = getAuth(req);
 
   try {
     const user = await User.findOne({ clerkId, isActive: true });
@@ -55,12 +52,7 @@ export async function getMe(req: Request, res: Response): Promise<void> {
 }
 
 export async function getProfile(req: Request, res: Response): Promise<void> {
-  const clerkId = req.headers["x-clerk-id"] as string;
-
-  if (!clerkId) {
-    res.status(400).json({ error: "Missing clerk ID" });
-    return;
-  }
+  const { userId: clerkId } = getAuth(req);
 
   try {
     const user = await User.findOne({ clerkId }).lean();
@@ -79,12 +71,7 @@ export async function updateProfile(
   req: Request,
   res: Response
 ): Promise<void> {
-  const clerkId = req.headers["x-clerk-id"] as string;
-
-  if (!clerkId) {
-    res.status(400).json({ error: "Missing clerk ID" });
-    return;
-  }
+  const { userId: clerkId } = getAuth(req);
 
   const {
     businessName,

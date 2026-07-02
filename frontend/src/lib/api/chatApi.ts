@@ -27,57 +27,38 @@ export interface ChatMessageAPI {
   updatedAt: string;
 }
 
-export async function createChatSession(
-  userId: string
-): Promise<ChatSessionAPI> {
-  const response = await api.post(
-    "/chats/",
-    {},
-    { headers: { "x-clerk-id": userId } }
-  );
+export async function createChatSession(): Promise<ChatSessionAPI> {
+  const response = await api.post("/chats/", {});
   return response.data.session;
 }
 
-export async function getUserChatSessions(
-  userId: string
-): Promise<ChatSessionAPI[]> {
-  const response = await api.get("/chats/", {
-    headers: { "x-clerk-id": userId },
-  });
+export async function getUserChatSessions(): Promise<ChatSessionAPI[]> {
+  const response = await api.get("/chats/");
   return response.data.sessions;
 }
 
-export async function deleteChatSession(
-  userId: string,
-  sessionId: string
-): Promise<void> {
-  await api.delete(`/chats/${sessionId}`, {
-    headers: { "x-clerk-id": userId },
-  });
+export async function deleteChatSession(sessionId: string): Promise<void> {
+  await api.delete(`/chats/${sessionId}`);
 }
 
 export async function getSessionMessages(
-  userId: string,
   sessionId: string
 ): Promise<ChatMessageAPI[]> {
-  const response = await api.get(`/chats/${sessionId}/messages`, {
-    headers: { "x-clerk-id": userId },
-  });
+  const response = await api.get(`/chats/${sessionId}/messages`);
   return response.data.messages;
 }
 
 export async function addChatMessage(
-  userId: string,
   sessionId: string,
   role: "user" | "assistant",
   content: string,
   invoice?: InvoiceAttachment
 ): Promise<ChatMessageAPI> {
-  const response = await api.post(
-    `/chats/${sessionId}/messages`,
-    { role, content, invoice },
-    { headers: { "x-clerk-id": userId } }
-  );
+  const response = await api.post(`/chats/${sessionId}/messages`, {
+    role,
+    content,
+    invoice,
+  });
   return response.data.message;
 }
 

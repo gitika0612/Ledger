@@ -1,5 +1,6 @@
 /// <reference types="node" />
 import { Request, Response } from "express";
+import { getAuth } from "@clerk/express";
 import { ChatSession } from "../models/ChatSession";
 import { ChatMessage } from "../models/ChatMessage";
 
@@ -8,12 +9,7 @@ export async function createSession(
   req: Request,
   res: Response
 ): Promise<void> {
-  const clerkId = req.headers["x-clerk-id"] as string;
-
-  if (!clerkId) {
-    res.status(400).json({ error: "Missing clerk ID" });
-    return;
-  }
+  const { userId: clerkId } = getAuth(req);
 
   try {
     const session = await ChatSession.create({
@@ -32,12 +28,7 @@ export async function getUserSessions(
   req: Request,
   res: Response
 ): Promise<void> {
-  const clerkId = req.headers["x-clerk-id"] as string;
-
-  if (!clerkId) {
-    res.status(400).json({ error: "Missing clerk ID" });
-    return;
-  }
+  const { userId: clerkId } = getAuth(req);
 
   try {
     const sessions = await ChatSession.find({ userId: clerkId })
@@ -57,7 +48,7 @@ export async function deleteSession(
   res: Response
 ): Promise<void> {
   const { sessionId } = req.params;
-  const clerkId = req.headers["x-clerk-id"] as string;
+  const { userId: clerkId } = getAuth(req);
 
   try {
     const session = await ChatSession.findOneAndDelete({
@@ -87,12 +78,7 @@ export async function getSessionMessages(
   res: Response
 ): Promise<void> {
   const { sessionId } = req.params;
-  const clerkId = req.headers["x-clerk-id"] as string;
-
-  if (!clerkId) {
-    res.status(400).json({ error: "Missing clerk ID" });
-    return;
-  }
+  const { userId: clerkId } = getAuth(req);
 
   try {
     // Verify session belongs to user
@@ -120,15 +106,26 @@ export async function getSessionMessages(
 // ── Add message to session ──
 export async function addMessage(req: Request, res: Response): Promise<void> {
   const { sessionId } = req.params;
-  const clerkId = req.headers["x-clerk-id"] as string;
+  const { userId: clerkId } = getAuth(req);
   const { role, content, invoice } = req.body;
 
-  if (!clerkId || !role || (!content && !invoice)) {
+  if (!role || (!content && !invoice)) {
     res.status(400).json({ error: "Missing required fields" });
     return;
   }
 
   try {
+    // Verify session belongs to user
+    const session = await ChatSession.findOne({
+      _id: sessionId,
+      userId: clerkId,
+    });
+
+    if (!session) {
+      res.status(404).json({ error: "Session not found" });
+      return;
+    }
+
     // Save message
     const message = await ChatMessage.create({
       sessionId,
@@ -171,9 +168,20 @@ export async function confirmInvoiceInMessage(
   res: Response
 ): Promise<void> {
   const { sessionId, messageId } = req.params;
+  const { userId: clerkId } = getAuth(req);
   const { invoiceId, invoiceNumber } = req.body;
 
   try {
+    const session = await ChatSession.findOne({
+      _id: sessionId,
+      userId: clerkId,
+    });
+
+    if (!session) {
+      res.status(404).json({ error: "Session not found" });
+      return;
+    }
+
     const message = await ChatMessage.findOneAndUpdate(
       { _id: messageId, sessionId },
       {
@@ -202,9 +210,20 @@ export async function updateMessageInvoice(
   res: Response
 ): Promise<void> {
   const { sessionId, messageId } = req.params;
+  const { userId: clerkId } = getAuth(req);
   const { invoiceData } = req.body;
 
   try {
+    const session = await ChatSession.findOne({
+      _id: sessionId,
+      userId: clerkId,
+    });
+
+    if (!session) {
+      res.status(404).json({ error: "Session not found" });
+      return;
+    }
+
     const message = await ChatMessage.findOneAndUpdate(
       { _id: messageId, sessionId },
       { "invoice.data": invoiceData },

@@ -64,7 +64,7 @@ const lineItemSchema = new Schema<ILineItem>({
 const invoiceSchema = new Schema<IInvoiceDocument>(
   {
     userId: { type: String, required: true, index: true },
-    invoiceNumber: { type: String, required: true, unique: true },
+    invoiceNumber: { type: String, required: true },
     clientId: { type: String, default: "" },
     clientName: { type: String, required: true, trim: true },
     lineItems: { type: [lineItemSchema], default: [] },
@@ -136,6 +136,9 @@ const invoiceSchema = new Schema<IInvoiceDocument>(
 );
 
 // ── Indexes ──
+// Invoice numbers only need to be unique per-user (each user has their own
+// numbering sequence), not globally across every user in the database.
+invoiceSchema.index({ userId: 1, invoiceNumber: 1 }, { unique: true });
 invoiceSchema.index({ userId: 1, clientName: 1, status: 1, createdAt: -1 });
 invoiceSchema.index({ userId: 1, clientId: 1, status: 1, createdAt: -1 });
 invoiceSchema.index({ userId: 1, invoiceMonth: 1 });
