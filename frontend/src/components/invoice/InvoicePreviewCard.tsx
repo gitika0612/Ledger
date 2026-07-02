@@ -376,8 +376,8 @@ export function InvoicePreviewCard({
   }, []);
 
   useEffect(() => {
-    if (!user || !invoice.clientName) return;
-    getClientByName(user.id, invoice.clientName).then((c) => {
+    if (!user?.id || !invoice.clientName) return;
+    getClientByName(invoice.clientName).then((c) => {
       setClient(c);
       setEditedClientName(c?.name || invoice.clientName);
       setEditedClientEmail(c?.email || "");
@@ -532,7 +532,7 @@ export function InvoicePreviewCard({
 
     if (user) {
       try {
-        const updated = await upsertClient(user.id, {
+        const updated = await upsertClient({
           name: editedClientName || editedInvoice.clientName,
           email: editedClientEmail,
           address: editedClientAddress,

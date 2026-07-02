@@ -106,7 +106,7 @@ export function SendInvoiceModal({
   const fmt = (amount: number) => formatCurrency(amount, currency);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user?.id) return;
     let cancelled = false;
 
     const load = async () => {

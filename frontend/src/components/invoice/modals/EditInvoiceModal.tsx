@@ -349,9 +349,9 @@ export function EditInvoiceModal({
   const [clientLoading, setClientLoading] = useState(false);
 
   useEffect(() => {
-    if (!user || !invoice.clientName) return;
+    if (!user?.id || !invoice.clientName) return;
     setClientLoading(true);
-    getClientByName(user.id, invoice.clientName)
+    getClientByName(invoice.clientName)
       .then((client) => {
         if (!client) return;
         setForm((prev) => ({

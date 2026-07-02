@@ -135,8 +135,8 @@ export function InvoiceViewPage() {
   }, [id]);
 
   useEffect(() => {
-    if (!invoice?.clientName || !user) return;
-    getClientByName(user.id, invoice.clientName)
+    if (!invoice?.clientName || !user?.id) return;
+    getClientByName(invoice.clientName)
       .then((c) => setClient(c))
       .catch(() => {});
   }, [invoice?.clientName, user?.id]);
@@ -185,17 +185,13 @@ export function InvoiceViewPage() {
       setInvoice((prev) => (prev ? { ...prev, ...data } : prev));
 
       if (user && data.clientName) {
-        const updatedClient = await updateClientByName(
-          user.id,
-          data.clientName,
-          {
-            email: data.clientEmail,
-            address: data.clientAddress,
-            city: data.clientCity,
-            state: data.clientState,
-            pincode: data.clientPincode,
-          }
-        );
+        const updatedClient = await updateClientByName(data.clientName, {
+          email: data.clientEmail,
+          address: data.clientAddress,
+          city: data.clientCity,
+          state: data.clientState,
+          pincode: data.clientPincode,
+        });
 
         // ── Refresh client card immediately ──
         // updateClientByName returns the updated client from DB.
