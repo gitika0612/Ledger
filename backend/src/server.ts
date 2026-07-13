@@ -10,6 +10,7 @@ import invoiceRoutes from "./routes/invoices";
 import chatRoutes from "./routes/chats";
 import clientRoutes from "./routes/clients";
 import paymentRoutes from "./routes/paymentRoutes";
+import currencyRoutes from "./routes/currencies";
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -49,6 +50,7 @@ app.use("/api/users", requireAuth, userRoutes);
 app.use("/api/invoices", requireAuth, invoiceRoutes);
 app.use("/api/chats", requireAuth, chatRoutes);
 app.use("/api/clients", requireAuth, clientRoutes);
+app.use("/api/currencies", requireAuth, currencyRoutes);
 app.use("/api/payments", paymentRoutes);
 
 app.get("/api/health", (_req, res) => {

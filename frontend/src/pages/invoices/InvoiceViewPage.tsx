@@ -31,14 +31,18 @@ import { SendInvoiceModal } from "@/components/invoice/modals/SendInvoiceModel";
 import { toast } from "sonner";
 import { getClientByName, updateClientByName } from "@/lib/api/clientApi";
 import type { ClientAPI } from "@/lib/api/clientApi";
-import { formatCurrency } from "@/lib/currency";
+import {
+  formatCurrencyAmount as formatCurrency,
+  isIndianCurrency,
+  getCurrencyInfo,
+} from "@/lib/currencies";
 import { useAuth } from "@/hooks/useAuth";
 
 interface Invoice {
   _id: string;
   invoiceNumber: string;
   clientName: string;
-  currency?: "INR" | "USD" | "EUR";
+  currency?: string;
   lineItems?: LineItem[];
   paymentTermsDays?: number;
   gstPercent: number;
@@ -95,7 +99,7 @@ const STATUS_CONFIG = {
   },
 };
 
-function formatINR(amount: number, currency?: "INR" | "USD" | "EUR") {
+function formatINR(amount: number, currency?: string) {
   return formatCurrency(amount, currency ?? "INR");
 }
 
@@ -261,7 +265,7 @@ export function InvoiceViewPage() {
 
   // Currency helpers
   const currency = invoice.currency ?? "INR";
-  const isINR = currency === "INR";
+  const isINR = isIndianCurrency(currency);
 
   return (
     <div className="min-h-screen bg-[#F9FAFB]">
@@ -301,7 +305,7 @@ export function InvoiceViewPage() {
               {status.label}
             </Badge>
             {/* Currency badge */}
-            {currency !== "INR" && (
+            {!isIndianCurrency(currency) && (
               <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-600 border border-indigo-100">
                 {currency}
               </span>
@@ -347,7 +351,7 @@ export function InvoiceViewPage() {
                   <p className="text-white font-bold text-xl">
                     {invoice.invoiceNumber}
                   </p>
-                  {currency !== "INR" && (
+                  {!isIndianCurrency(currency) && (
                     <p className="text-indigo-200 text-xs mt-1">{currency}</p>
                   )}
                 </div>
@@ -534,8 +538,7 @@ export function InvoiceViewPage() {
                   {!isINR && (invoice.taxAmount || 0) > 0 && (
                     <div className="flex justify-between text-sm">
                       <span className="text-gray-500">
-                        {invoice.taxLabel ||
-                          (currency === "EUR" ? "VAT" : "Tax")}
+                        {invoice.taxLabel || getCurrencyInfo(currency).taxLabel}
                         {(invoice.taxPercent || 0) > 0
                           ? ` (${invoice.taxPercent}%)`
                           : ""}

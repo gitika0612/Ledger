@@ -2,6 +2,11 @@ import { ChatOpenAI } from "@langchain/openai";
 import { z } from "zod";
 import { InvoiceAgentState, AgentIntent } from "../state";
 
+// Broad currency symbol class used by heuristic regexes below — these are best-effort
+// signals (amount presence / multi-currency detection), not correctness-critical, so
+// digits alone (\d) already act as a safety net when a symbol isn't recognized.
+const CURRENCY_SYMBOLS = "₹$€£¥₩₦₽₺₴₫₱";
+
 const routerSchema = z.object({
   intent: z.enum([
     "new",
@@ -44,7 +49,7 @@ export async function routerNode(
       trimmedPrompt
     ) ||
     /^i (?:want|need) to bill\b/i.test(trimmedPrompt);
-  const hasAnyAmount = /[₹$€]|\d/.test(trimmedPrompt);
+  const hasAnyAmount = new RegExp(`[${CURRENCY_SYMBOLS}]|\\d`).test(trimmedPrompt);
   const hasAnyCapitalizedName = /[A-Z][a-zA-Z]+/.test(
     trimmedPrompt.replace(/^\w+/, "")
   );
@@ -124,7 +129,7 @@ export async function routerNode(
   const hasClientNameAfterVerb = verbAndNextWord
     ? /^[A-Z][a-zA-Z]*$/.test(verbAndNextWord[2])
     : false;
-  const hasAmount = /[₹$€]|\d/.test(state.prompt);
+  const hasAmount = new RegExp(`[${CURRENCY_SYMBOLS}]|\\d`).test(state.prompt);
   const hasInvoiceableContent = hasClientNameAfterVerb || hasAmount;
 
   const hasCopySignal =
@@ -142,7 +147,10 @@ export async function routerNode(
     /\bfor\s+\d+\s+months?\b/i.test(state.prompt) ||
     /\bmonthly\s+for\b/i.test(state.prompt) ||
     /\b(q1|q2|q3|q4)\b/i.test(state.prompt) ||
-    /[₹$€][\d,]+.*\band\b.*[₹$€][\d,]+/i.test(state.prompt);
+    new RegExp(
+      `[${CURRENCY_SYMBOLS}][\\d,]+.*\\band\\b.*[${CURRENCY_SYMBOLS}][\\d,]+`,
+      "i"
+    ).test(state.prompt);
 
   if (
     startsWithInvoice &&
@@ -166,7 +174,10 @@ export async function routerNode(
   const againMatch = state.prompt.match(
     /^(?:invoice|bill)\s+([A-Za-z]+)\s+again\b/i
   );
-  const againHasAmount = /[₹$€][\d,]|\d+k\b|\d+\s*lakh/i.test(state.prompt);
+  const againHasAmount = new RegExp(
+    `[${CURRENCY_SYMBOLS}][\\d,]|\\d+k\\b|\\d+\\s*lakh`,
+    "i"
+  ).test(state.prompt);
   if (againMatch && !againHasAmount) {
     const againClient = againMatch[1];
     console.log(

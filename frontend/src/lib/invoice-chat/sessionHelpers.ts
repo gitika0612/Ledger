@@ -1,4 +1,9 @@
 import { SessionInvoice } from "@/components/invoice/InvoicePanel";
+import {
+  formatCurrencyAmount as formatCurrency,
+  isIndianCurrency,
+  getCurrencyInfo,
+} from "@/lib/currencies";
 
 export const SESSION_LIMIT = 30;
 const RECENT_FULL_DETAIL = 10;
@@ -20,11 +25,9 @@ export function buildSessionContext(invoices: SessionInvoice[]): string {
     const compactLines = older
       .map((si) => {
         const inv = si.invoice;
-        const symbol =
-          inv.currency === "USD" ? "$" : inv.currency === "EUR" ? "€" : "₹";
         return `${si.invoiceNumber ?? "Draft"} | ${
           inv.clientName
-        } | ${symbol}${inv.total.toLocaleString("en-IN")} | ${
+        } | ${formatCurrency(inv.total, inv.currency ?? "INR")} | ${
           si.status ?? "draft"
         }`;
       })
@@ -39,8 +42,7 @@ export function buildSessionContext(invoices: SessionInvoice[]): string {
   const recentBlocks = recent.map((si, index) => {
     const inv = si.invoice;
     const isMostRecent = index === recent.length - 1;
-    const symbol =
-      inv.currency === "USD" ? "$" : inv.currency === "EUR" ? "€" : "₹";
+    const currency = inv.currency ?? "INR";
 
     const lineItemsStr =
       inv.lineItems
@@ -48,9 +50,10 @@ export function buildSessionContext(invoices: SessionInvoice[]): string {
           (item) =>
             `  - ${item.description} | Qty: ${item.quantity} ${
               item.unit
-            } | Rate: ${symbol}${item.rate.toLocaleString(
-              "en-IN"
-            )} | Amount: ${symbol}${item.amount.toLocaleString("en-IN")}`
+            } | Rate: ${formatCurrency(
+              item.rate,
+              currency
+            )} | Amount: ${formatCurrency(item.amount, currency)}`
         )
         .join("\n") ?? "  - (no line items)";
 
@@ -76,15 +79,15 @@ export function buildSessionContext(invoices: SessionInvoice[]): string {
       // When true, the stated total already includes tax.
       // editorNode reads this to back-calculate instead of adding tax on top.
       inv.isTaxInclusive ? `Tax Inclusive: true` : "",
-      inv.currency === "INR"
+      isIndianCurrency(currency)
         ? `GST: ${inv.gstPercent}% ${inv.gstType ?? "CGST_SGST"}`
         : `Tax: ${inv.taxPercent ?? 0}% ${
-            inv.taxLabel || (inv.currency === "EUR" ? "VAT" : "Tax")
+            inv.taxLabel || getCurrencyInfo(currency).taxLabel
           }`,
       `Payment Terms: ${inv.paymentTermsDays} days`,
       discountLine,
-      `Subtotal: ${symbol}${inv.subtotal?.toLocaleString("en-IN")}`,
-      `Total: ${symbol}${inv.total.toLocaleString("en-IN")}`,
+      `Subtotal: ${formatCurrency(inv.subtotal ?? 0, currency)}`,
+      `Total: ${formatCurrency(inv.total, currency)}`,
       `Line Items:\n${lineItemsStr}`,
       inv.notes ? `Notes: ${inv.notes}` : "",
     ]

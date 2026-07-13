@@ -3,6 +3,46 @@ import { ParsedInvoice } from "../schemas/invoiceSchema";
 import { findClientMatch } from "../../lib/clientMatcher";
 import { recalculateTotals, formatCurrency } from "../utils/invoiceUtils";
 import { Invoice } from "../../models/Invoice";
+import {
+  isIndianCurrency,
+  getCurrencyInfo,
+  getCurrencySymbol,
+  isValidCurrencyCode,
+} from "../../lib/currencies";
+
+// Common currency symbols worth sniffing directly out of free-text prompts.
+// (Full ISO code detection below covers everything else via explicit 3-letter codes.)
+const CURRENCY_SYMBOL_MAP: Record<string, string> = {
+  "$": "USD",
+  "€": "EUR",
+  "£": "GBP",
+  "₹": "INR",
+  "¥": "JPY",
+  "₩": "KRW",
+  "₦": "NGN",
+  "₽": "RUB",
+  "₺": "TRY",
+  "₴": "UAH",
+  "₫": "VND",
+  "₱": "PHP",
+};
+
+/**
+ * Detects an explicit currency override in free text: a known symbol, an
+ * ALL-CAPS 3-letter ISO code (e.g. "AED", "GBP"), or (for backward
+ * compatibility) the English words dollars/euros/rupees.
+ */
+function detectPromptCurrency(prompt: string): string | null {
+  for (const [symbol, code] of Object.entries(CURRENCY_SYMBOL_MAP)) {
+    if (prompt.includes(symbol)) return code;
+  }
+  const codeMatch = prompt.match(/\b[A-Z]{3}\b/);
+  if (codeMatch && isValidCurrencyCode(codeMatch[0])) return codeMatch[0];
+  if (/USD|dollars?/i.test(prompt)) return "USD";
+  if (/EUR|euros?/i.test(prompt)) return "EUR";
+  if (/INR|Rs\.?|rupees?/i.test(prompt)) return "INR";
+  return null;
+}
 
 function parseSessionBlocks(sessionContext: string): Array<{
   ref: string;
@@ -28,7 +68,7 @@ function parseSessionBlocks(sessionContext: string): Array<{
             ?.replace(/\[MOST RECENT\]/i, "")
             .trim() ?? "",
         clientName: clientMatch[1].trim(),
-        total: block.match(/Total:\s*[₹$€]?([\d,]+)/)?.[1]?.trim() ?? "0",
+        total: block.match(/Total:\s*[^\d]*?([\d,]+)/)?.[1]?.trim() ?? "0",
         month: block.match(/Invoice Month:\s*(.+)/i)?.[1]?.trim() ?? "",
         raw: block.trim(),
       };
@@ -70,18 +110,23 @@ function findSourceBlock(sessionContext: string, ref: string): string | null {
 }
 
 function parseBlockToInvoice(block: string): ParsedInvoice | null {
-  const currencyMatch = block.match(/Currency:\s*(INR|USD|EUR)/i);
-  const currency: "INR" | "USD" | "EUR" = currencyMatch
-    ? (currencyMatch[1].toUpperCase() as "INR" | "USD" | "EUR")
-    : block.includes("$")
-    ? "USD"
-    : block.includes("€")
-    ? "EUR"
-    : "INR";
+  const currencyMatch = block.match(/Currency:\s*([A-Za-z]{3})/i);
+  const currency: string =
+    currencyMatch && isValidCurrencyCode(currencyMatch[1])
+      ? currencyMatch[1].toUpperCase()
+      : block.includes("$")
+      ? "USD"
+      : block.includes("€")
+      ? "EUR"
+      : block.includes("£")
+      ? "GBP"
+      : block.includes("¥")
+      ? "JPY"
+      : "INR";
 
   const lineItemsMatch = [
     ...block.matchAll(
-      /-\s*(.+?)\s*\|\s*Qty:\s*([\d.]+)\s*(.+?)\s*\|\s*Rate:\s*[₹$€]?([\d,]+)\s*\|\s*Amount:\s*[₹$€]?([\d,]+)/g
+      /-\s*(.+?)\s*\|\s*Qty:\s*([\d.]+)\s*(.+?)\s*\|\s*Rate:\s*[^\d]*?([\d,]+)\s*\|\s*Amount:\s*[^\d]*?([\d,]+)/g
     ),
   ];
 
@@ -97,8 +142,8 @@ function parseBlockToInvoice(block: string): ParsedInvoice | null {
 
   const gstMatch = block.match(/GST:\s*([\d.]+)%\s*(\w+)/i);
   const taxLineMatch = block.match(/Tax:\s*([\d.]+)%\s*(\w+)/i);
-  const totalMatch = block.match(/Total:\s*[₹$€]?([\d,]+)/i);
-  const subtotalMatch = block.match(/Subtotal:\s*[₹$€]?([\d,]+)/i);
+  const totalMatch = block.match(/Total:\s*[^\d]*?([\d,]+)/i);
+  const subtotalMatch = block.match(/Subtotal:\s*[^\d]*?([\d,]+)/i);
   const termsMatch = block.match(/Payment Terms:\s*(\d+)/i);
   const clientMatch = block.match(/Client:\s*(.+)/i);
   const monthMatch = block.match(/Invoice Month:\s*(.+)/i);
@@ -137,7 +182,7 @@ function parseBlockToInvoice(block: string): ParsedInvoice | null {
     },
   ];
 
-  if (currency === "INR") {
+  if (isIndianCurrency(currency)) {
     const gstPercent = parseFloat(gstMatch?.[1] ?? "18");
     const gstType =
       (gstMatch?.[2] ?? "CGST_SGST") === "IGST"
@@ -180,7 +225,7 @@ function parseBlockToInvoice(block: string): ParsedInvoice | null {
       : gstMatch
       ? parseFloat(gstMatch[1])
       : 0;
-    const taxLabel = taxLineMatch?.[2] || (currency === "EUR" ? "VAT" : "Tax");
+    const taxLabel = taxLineMatch?.[2] || getCurrencyInfo(currency).taxLabel;
     const taxAmount =
       gstAmount > 0 ? gstAmount : Math.round((subtotal * taxPercent) / 100);
     return {
@@ -306,22 +351,21 @@ async function fetchLastConfirmedInvoice(
   }
 }
 
-function parseAmountOverride(
-  prompt: string,
-  currency: "INR" | "USD" | "EUR"
-): number | null {
+function parseAmountOverride(prompt: string, currency: string): number | null {
   let match: RegExpMatchArray | null = null;
-  if (currency === "USD") {
-    match = prompt.match(
-      /\$\s*([\d,]+(?:\.\d+)?(?:k|thousand)?)|USD\s*([\d,]+(?:\.\d+)?(?:k|thousand)?)/i
-    );
-  } else if (currency === "EUR") {
-    match = prompt.match(
-      /€\s*([\d,]+(?:\.\d+)?(?:k|thousand)?)|EUR\s*([\d,]+(?:\.\d+)?(?:k|thousand)?)/i
-    );
-  } else {
+  if (isIndianCurrency(currency)) {
     match = prompt.match(
       /(?:₹|Rs\.?|INR)\s*([\d,]+(?:\.\d+)?(?:k|L|lakh|thousand)?)/i
+    );
+  } else {
+    const symbol = getCurrencySymbol(currency);
+    // Escape the symbol for regex use (currency symbols are non-alphanumeric, but be safe)
+    const escapedSymbol = symbol.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    match = prompt.match(
+      new RegExp(
+        `${escapedSymbol}\\s*([\\d,]+(?:\\.\\d+)?(?:k|thousand)?)|\\b${currency}\\s*([\\d,]+(?:\\.\\d+)?(?:k|thousand)?)`,
+        "i"
+      )
     );
   }
   if (!match) return null;
@@ -595,38 +639,27 @@ export async function copierNode(
   }
 
   // ── Detect currency override in prompt ──
-  const promptCurrency: "INR" | "USD" | "EUR" | null = /\$|USD|dollars?/i.test(
-    state.prompt
-  )
-    ? "USD"
-    : /€|EUR|euros?/i.test(state.prompt)
-    ? "EUR"
-    : /₹|INR|Rs\.?|rupees?/i.test(state.prompt)
-    ? "INR"
-    : null;
+  const promptCurrency = detectPromptCurrency(state.prompt);
 
-  const currency = (promptCurrency ?? sourceInv.currency ?? "INR") as
-    | "INR"
-    | "USD"
-    | "EUR";
+  const currency = promptCurrency ?? sourceInv.currency ?? "INR";
   const currencyChanged =
     promptCurrency !== null && promptCurrency !== sourceInv.currency;
 
   const amountOverride = parseAmountOverride(state.prompt, currency);
 
   let gstPercent =
-    currencyChanged && currency !== "INR" ? 0 : sourceInv.gstPercent;
+    currencyChanged && !isIndianCurrency(currency) ? 0 : sourceInv.gstPercent;
   let gstType = sourceInv.gstType ?? "CGST_SGST";
   let taxPercent =
-    currencyChanged && currency === "INR" ? 0 : sourceInv.taxPercent ?? 0;
-  let taxLabel =
-    sourceInv.taxLabel ||
-    (currency === "EUR" ? "VAT" : currency === "USD" ? "Tax" : "");
+    currencyChanged && isIndianCurrency(currency)
+      ? 0
+      : sourceInv.taxPercent ?? 0;
+  let taxLabel = sourceInv.taxLabel || getCurrencyInfo(currency).taxLabel;
   let paymentTermsDays = sourceInv.paymentTermsDays;
 
   const pl = state.prompt.toLowerCase();
 
-  if (currency === "INR") {
+  if (isIndianCurrency(currency)) {
     if (/no gst|without gst|0% gst|gst exempt/.test(pl)) gstPercent = 0;
     const gstPctOverride = pl.match(/with\s+(\d+(?:\.\d+)?)\s*%\s*gst/);
     if (gstPctOverride) gstPercent = parseFloat(gstPctOverride[1]);
@@ -637,7 +670,7 @@ export async function copierNode(
     if (/no tax|no vat|0% tax|0% vat|tax exempt/.test(pl)) taxPercent = 0;
     const taxPctOverride = pl.match(/with\s+(\d+(?:\.\d+)?)\s*%\s*(?:tax|vat)/);
     if (taxPctOverride) taxPercent = parseFloat(taxPctOverride[1]);
-    taxLabel = currency === "EUR" ? "VAT" : "Tax";
+    taxLabel = getCurrencyInfo(currency).taxLabel;
   }
 
   const termOverride = pl.match(/(\d+)\s*day(?:s)?\s+(?:payment\s+)?terms?/);
@@ -739,10 +772,16 @@ export async function copierNode(
     taxPercent,
     taxLabel,
     paymentTermsDays,
-    gstAmount: currency !== "INR" ? 0 : (undefined as unknown as number),
-    cgstAmount: currency !== "INR" ? 0 : (undefined as unknown as number),
-    sgstAmount: currency !== "INR" ? 0 : (undefined as unknown as number),
-    igstAmount: currency !== "INR" ? 0 : (undefined as unknown as number),
+    gstAmount: !isIndianCurrency(currency) ? 0 : (undefined as unknown as number),
+    cgstAmount: !isIndianCurrency(currency)
+      ? 0
+      : (undefined as unknown as number),
+    sgstAmount: !isIndianCurrency(currency)
+      ? 0
+      : (undefined as unknown as number),
+    igstAmount: !isIndianCurrency(currency)
+      ? 0
+      : (undefined as unknown as number),
     discountType: sourceInv.discountType ?? "none",
     discountValue: sourceInv.discountValue ?? 0,
     notes: sourceInv.notes ?? "",

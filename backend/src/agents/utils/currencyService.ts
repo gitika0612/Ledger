@@ -1,76 +1,24 @@
-// Live exchange rate fetcher with 1-hour in-memory cache
-// Uses exchangerate-api.com free tier — no API key needed
+// Builds the "$1 USD = ₹94 | ..." context string fed into invoice-generation prompts,
+// so the LLM can sanity-check cross-currency amounts. Sourced from the single
+// consolidated USD-based exchange rate service — never fetches or caches rates itself.
 
-interface RateCache {
-  rates: Record<string, number>;
-  fetchedAt: number;
-}
-
-// Typed shape of the API response
-interface ExchangeRateApiResponse {
-  result: string;
-  base_code: string;
-  rates: Record<string, number>;
-}
-
-let cache: RateCache | null = null;
-const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
-
-const FALLBACK_RATES: Record<string, number> = {
-  USD: 94,
-  GBP: 106,
-  EUR: 90,
-  CAD: 69,
-  AUD: 61,
-  SGD: 70,
-  AED: 26,
-};
-
-async function fetchLiveRates(): Promise<Record<string, number>> {
-  try {
-    const res = await fetch("https://api.exchangerate-api.com/v4/latest/INR", {
-      signal: AbortSignal.timeout(3000), // 3 second timeout
-    });
-
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-    const data = (await res.json()) as ExchangeRateApiResponse;
-
-    // data.rates contains { USD: 0.01064, GBP: 0.00943, ... } (value of 1 INR in that currency)
-    // We want: how many INR = 1 USD → invert: 1 / 0.01064 = 94
-    const inrRates: Record<string, number> = {};
-    for (const [currency, rate] of Object.entries(data.rates)) {
-      if (rate > 0) {
-        inrRates[currency] = Math.round(1 / rate);
-      }
-    }
-    return inrRates;
-  } catch (err) {
-    console.warn("⚠️ Exchange rate fetch failed, using fallback rates:", err);
-    return FALLBACK_RATES;
-  }
-}
-
-export async function getExchangeRates(): Promise<Record<string, number>> {
-  const now = Date.now();
-
-  // Return cached rates if still fresh
-  if (cache && now - cache.fetchedAt < CACHE_TTL_MS) {
-    return cache.rates;
-  }
-
-  const rates = await fetchLiveRates();
-  cache = { rates, fetchedAt: now };
-  return rates;
-}
+import {
+  getUsdExchangeRates,
+  FALLBACK_USD_RATES,
+} from "../../lib/exchangeRateService";
 
 export async function buildCurrencyContext(): Promise<string> {
-  const rates = await getExchangeRates();
+  const rates = await getUsdExchangeRates();
+  const inrPerUsd = rates.INR ?? FALLBACK_USD_RATES.INR;
 
-  const r = (currency: string): number =>
-    rates[currency] ?? FALLBACK_RATES[currency] ?? 0;
+  // Converts "units of `code` per 1 USD" into "₹ per 1 unit of `code`".
+  const toInr = (code: string): number => {
+    const unitsPerUsd = rates[code] ?? FALLBACK_USD_RATES[code];
+    if (!unitsPerUsd) return 0;
+    return Math.round(inrPerUsd / unitsPerUsd);
+  };
 
-  return `$1 USD = ₹${r("USD")} | £1 GBP = ₹${r("GBP")} | €1 EUR = ₹${r(
+  return `$1 USD = ₹${toInr("USD")} | £1 GBP = ₹${toInr("GBP")} | €1 EUR = ₹${toInr(
     "EUR"
-  )} | 1 AED = ₹${r("AED")} | 1 SGD = ₹${r("SGD")}`;
+  )} | 1 AED = ₹${toInr("AED")} | 1 SGD = ₹${toInr("SGD")}`;
 }

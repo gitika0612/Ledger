@@ -1,0 +1,950 @@
+[
+  {
+    "code": "AED",
+    "name": "United Arab Emirates Dirham",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "AFN",
+    "name": "Afghan Afghani",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "ALL",
+    "name": "Albanian Lek",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "AMD",
+    "name": "Armenian Dram",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "ANG",
+    "name": "Netherlands Antillean Guilder",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "AOA",
+    "name": "Angolan Kwanza",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "ARS",
+    "name": "Argentine Peso",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "AUD",
+    "name": "Australian Dollar",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "AWG",
+    "name": "Aruban Florin",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "AZN",
+    "name": "Azerbaijani Manat",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "BAM",
+    "name": "Bosnia-Herzegovina Convertible Mark",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "BBD",
+    "name": "Barbadian Dollar",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "BDT",
+    "name": "Bangladeshi Taka",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "BGN",
+    "name": "Bulgarian Lev",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "BHD",
+    "name": "Bahraini Dinar",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "BIF",
+    "name": "Burundian Franc",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "BMD",
+    "name": "Bermudan Dollar",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "BND",
+    "name": "Brunei Dollar",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "BOB",
+    "name": "Bolivian Boliviano",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "BRL",
+    "name": "Brazilian Real",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "BSD",
+    "name": "Bahamian Dollar",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "BTN",
+    "name": "Bhutanese Ngultrum",
+    "taxLabel": "Tax",
+    "stripeSupported": false
+  },
+  {
+    "code": "BWP",
+    "name": "Botswanan Pula",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "BYN",
+    "name": "Belarusian Ruble",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "BZD",
+    "name": "Belize Dollar",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "CAD",
+    "name": "Canadian Dollar",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "CDF",
+    "name": "Congolese Franc",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "CHF",
+    "name": "Swiss Franc",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "CLP",
+    "name": "Chilean Peso",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "CNY",
+    "name": "Chinese Yuan",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "COP",
+    "name": "Colombian Peso",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "CRC",
+    "name": "Costa Rican Colón",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "CUP",
+    "name": "Cuban Peso",
+    "taxLabel": "Tax",
+    "stripeSupported": false
+  },
+  {
+    "code": "CVE",
+    "name": "Cape Verdean Escudo",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "CZK",
+    "name": "Czech Koruna",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "DJF",
+    "name": "Djiboutian Franc",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "DKK",
+    "name": "Danish Krone",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "DOP",
+    "name": "Dominican Peso",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "DZD",
+    "name": "Algerian Dinar",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "EGP",
+    "name": "Egyptian Pound",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "ERN",
+    "name": "Eritrean Nakfa",
+    "taxLabel": "Tax",
+    "stripeSupported": false
+  },
+  {
+    "code": "ETB",
+    "name": "Ethiopian Birr",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "EUR",
+    "name": "Euro",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "FJD",
+    "name": "Fijian Dollar",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "FKP",
+    "name": "Falkland Islands Pound",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "GBP",
+    "name": "British Pound",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "GEL",
+    "name": "Georgian Lari",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "GHS",
+    "name": "Ghanaian Cedi",
+    "taxLabel": "Tax",
+    "stripeSupported": false
+  },
+  {
+    "code": "GIP",
+    "name": "Gibraltar Pound",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "GMD",
+    "name": "Gambian Dalasi",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "GNF",
+    "name": "Guinean Franc",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "GTQ",
+    "name": "Guatemalan Quetzal",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "GYD",
+    "name": "Guyanaese Dollar",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "HKD",
+    "name": "Hong Kong Dollar",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "HNL",
+    "name": "Honduran Lempira",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "HTG",
+    "name": "Haitian Gourde",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "HUF",
+    "name": "Hungarian Forint",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "IDR",
+    "name": "Indonesian Rupiah",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "ILS",
+    "name": "Israeli New Shekel",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "INR",
+    "name": "Indian Rupee",
+    "taxLabel": "GST",
+    "stripeSupported": true
+  },
+  {
+    "code": "IQD",
+    "name": "Iraqi Dinar",
+    "taxLabel": "Tax",
+    "stripeSupported": false
+  },
+  {
+    "code": "IRR",
+    "name": "Iranian Rial",
+    "taxLabel": "Tax",
+    "stripeSupported": false
+  },
+  {
+    "code": "ISK",
+    "name": "Icelandic Króna",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "JMD",
+    "name": "Jamaican Dollar",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "JOD",
+    "name": "Jordanian Dinar",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "JPY",
+    "name": "Japanese Yen",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "KES",
+    "name": "Kenyan Shilling",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "KGS",
+    "name": "Kyrgystani Som",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "KHR",
+    "name": "Cambodian Riel",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "KMF",
+    "name": "Comorian Franc",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "KPW",
+    "name": "North Korean Won",
+    "taxLabel": "Tax",
+    "stripeSupported": false
+  },
+  {
+    "code": "KRW",
+    "name": "South Korean Won",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "KWD",
+    "name": "Kuwaiti Dinar",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "KYD",
+    "name": "Cayman Islands Dollar",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "KZT",
+    "name": "Kazakhstani Tenge",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "LAK",
+    "name": "Laotian Kip",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "LBP",
+    "name": "Lebanese Pound",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "LKR",
+    "name": "Sri Lankan Rupee",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "LRD",
+    "name": "Liberian Dollar",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "LSL",
+    "name": "Lesotho Loti",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "LYD",
+    "name": "Libyan Dinar",
+    "taxLabel": "Tax",
+    "stripeSupported": false
+  },
+  {
+    "code": "MAD",
+    "name": "Moroccan Dirham",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "MDL",
+    "name": "Moldovan Leu",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "MGA",
+    "name": "Malagasy Ariary",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "MKD",
+    "name": "Macedonian Denar",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "MMK",
+    "name": "Myanmar Kyat",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "MNT",
+    "name": "Mongolian Tugrik",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "MOP",
+    "name": "Macanese Pataca",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "MRU",
+    "name": "Mauritanian Ouguiya",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "MUR",
+    "name": "Mauritian Rupee",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "MVR",
+    "name": "Maldivian Rufiyaa",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "MWK",
+    "name": "Malawian Kwacha",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "MXN",
+    "name": "Mexican Peso",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "MYR",
+    "name": "Malaysian Ringgit",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "MZN",
+    "name": "Mozambican Metical",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "NAD",
+    "name": "Namibian Dollar",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "NGN",
+    "name": "Nigerian Naira",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "NIO",
+    "name": "Nicaraguan Córdoba",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "NOK",
+    "name": "Norwegian Krone",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "NPR",
+    "name": "Nepalese Rupee",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "NZD",
+    "name": "New Zealand Dollar",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "OMR",
+    "name": "Omani Rial",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "PAB",
+    "name": "Panamanian Balboa",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "PEN",
+    "name": "Peruvian Sol",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "PGK",
+    "name": "Papua New Guinean Kina",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "PHP",
+    "name": "Philippine Peso",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "PKR",
+    "name": "Pakistani Rupee",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "PLN",
+    "name": "Polish Zloty",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "PYG",
+    "name": "Paraguayan Guarani",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "QAR",
+    "name": "Qatari Riyal",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "RON",
+    "name": "Romanian Leu",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "RSD",
+    "name": "Serbian Dinar",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "RUB",
+    "name": "Russian Ruble",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "RWF",
+    "name": "Rwandan Franc",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "SAR",
+    "name": "Saudi Riyal",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "SBD",
+    "name": "Solomon Islands Dollar",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "SCR",
+    "name": "Seychellois Rupee",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "SDG",
+    "name": "Sudanese Pound",
+    "taxLabel": "Tax",
+    "stripeSupported": false
+  },
+  {
+    "code": "SEK",
+    "name": "Swedish Krona",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "SGD",
+    "name": "Singapore Dollar",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "SHP",
+    "name": "St. Helena Pound",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "SLE",
+    "name": "Sierra Leonean Leone",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "SLL",
+    "name": "Sierra Leonean Leone (1964—2022)",
+    "taxLabel": "Tax",
+    "stripeSupported": false
+  },
+  {
+    "code": "SOS",
+    "name": "Somali Shilling",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "SRD",
+    "name": "Surinamese Dollar",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "SSP",
+    "name": "South Sudanese Pound",
+    "taxLabel": "Tax",
+    "stripeSupported": false
+  },
+  {
+    "code": "STN",
+    "name": "São Tomé & Príncipe Dobra",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "SVC",
+    "name": "Salvadoran Colón",
+    "taxLabel": "Tax",
+    "stripeSupported": false
+  },
+  {
+    "code": "SYP",
+    "name": "Syrian Pound",
+    "taxLabel": "Tax",
+    "stripeSupported": false
+  },
+  {
+    "code": "SZL",
+    "name": "Swazi Lilangeni",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "THB",
+    "name": "Thai Baht",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "TJS",
+    "name": "Tajikistani Somoni",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "TMT",
+    "name": "Turkmenistani Manat",
+    "taxLabel": "Tax",
+    "stripeSupported": false
+  },
+  {
+    "code": "TND",
+    "name": "Tunisian Dinar",
+    "taxLabel": "Tax",
+    "stripeSupported": false
+  },
+  {
+    "code": "TOP",
+    "name": "Tongan Paʻanga",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "TRY",
+    "name": "Turkish Lira",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "TTD",
+    "name": "Trinidad & Tobago Dollar",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "TWD",
+    "name": "New Taiwan Dollar",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "TZS",
+    "name": "Tanzanian Shilling",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "UAH",
+    "name": "Ukrainian Hryvnia",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "UGX",
+    "name": "Ugandan Shilling",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "USD",
+    "name": "US Dollar",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "UYU",
+    "name": "Uruguayan Peso",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "UZS",
+    "name": "Uzbekistani Som",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "VES",
+    "name": "Venezuelan Bolívar",
+    "taxLabel": "Tax",
+    "stripeSupported": false
+  },
+  {
+    "code": "VND",
+    "name": "Vietnamese Dong",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "VUV",
+    "name": "Vanuatu Vatu",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "WST",
+    "name": "Samoan Tala",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "XAF",
+    "name": "Central African CFA Franc",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "XCD",
+    "name": "East Caribbean Dollar",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "XCG",
+    "name": "Caribbean guilder",
+    "taxLabel": "Tax",
+    "stripeSupported": false
+  },
+  {
+    "code": "XOF",
+    "name": "West African CFA Franc",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "XPF",
+    "name": "CFP Franc",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "YER",
+    "name": "Yemeni Rial",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "ZAR",
+    "name": "South African Rand",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "ZMW",
+    "name": "Zambian Kwacha",
+    "taxLabel": "Tax",
+    "stripeSupported": true
+  },
+  {
+    "code": "ZWG",
+    "name": "Zimbabwean Gold",
+    "taxLabel": "Tax",
+    "stripeSupported": false
+  },
+  {
+    "code": "ZWL",
+    "name": "Zimbabwean Dollar (2009–2024)",
+    "taxLabel": "Tax",
+    "stripeSupported": false
+  }
+]

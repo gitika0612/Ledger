@@ -8,6 +8,12 @@ import {
   formatCurrency,
 } from "../utils/invoiceUtils";
 import { Invoice } from "../../models/Invoice";
+import {
+  isIndianCurrency,
+  getCurrencyInfo,
+  getCurrencySymbol,
+  isValidCurrencyCode,
+} from "../../lib/currencies";
 
 const FIELD_LABELS: Record<string, string> = {
   clientName: "client name",
@@ -27,7 +33,7 @@ function detectGstChange(
   prompt: string,
   currency: string
 ): { gstPercent: number; gstType?: "CGST_SGST" | "IGST" } | null {
-  if (currency !== "INR") return null;
+  if (!isIndianCurrency(currency)) return null;
   const lower = prompt.toLowerCase();
   const removeGst =
     /\b(remove|no|without|zero|0%)\b.*\bgst\b/.test(lower) ||
@@ -49,9 +55,9 @@ function detectTaxChange(
   prompt: string,
   currency: string
 ): { taxPercent: number; taxLabel: string } | null {
-  if (currency === "INR") return null;
+  if (isIndianCurrency(currency)) return null;
   const lower = prompt.toLowerCase();
-  const taxLabel = currency === "EUR" ? "VAT" : "Tax";
+  const taxLabel = getCurrencyInfo(currency).taxLabel;
   const removeTax =
     /\b(remove|no|without|zero|0%)\b.*\b(vat|tax)\b/.test(lower) ||
     /\b(vat|tax)\b.*\b(remove|no|without|zero|0%)\b/.test(lower);
@@ -131,15 +137,15 @@ function formatLineItemsForPrompt(
   lineItems: ParsedInvoice["lineItems"],
   currency: string
 ): string {
-  const symbol = currency === "USD" ? "$" : currency === "EUR" ? "€" : "₹";
+  const symbol = getCurrencySymbol(currency);
   return lineItems
     .map(
       (item, i) =>
         `${i + 1}. "${item.description}" | Qty: ${item.quantity} ${
           item.unit
         } | Rate: ${symbol}${item.rate.toLocaleString(
-          "en-IN"
-        )} | Amount: ${symbol}${item.amount.toLocaleString("en-IN")}`
+          "en-US"
+        )} | Amount: ${symbol}${item.amount.toLocaleString("en-US")}`
     )
     .join("\n");
 }
@@ -222,7 +228,7 @@ function resolveTargetFromSession(
 function parseBlockToInvoice(block: string): ParsedInvoice | null {
   const lineItemsMatch = [
     ...block.matchAll(
-      /-\s*(.+?)\s*\|\s*Qty:\s*([\d.]+)\s*(.+?)\s*\|\s*Rate:\s*[₹$€]?([\d,]+)\s*\|\s*Amount:\s*[₹$€]?([\d,]+)/g
+      /-\s*(.+?)\s*\|\s*Qty:\s*([\d.]+)\s*(.+?)\s*\|\s*Rate:\s*[^\d]*?([\d,]+)\s*\|\s*Amount:\s*[^\d]*?([\d,]+)/g
     ),
   ];
   const lineItems = lineItemsMatch.map((m) => ({
@@ -235,14 +241,19 @@ function parseBlockToInvoice(block: string): ParsedInvoice | null {
     hsnSacType: "SAC" as const,
   }));
 
-  const currencyMatch = block.match(/Currency:\s*(INR|USD|EUR)/i);
-  const currency: "INR" | "USD" | "EUR" = currencyMatch
-    ? (currencyMatch[1].toUpperCase() as "INR" | "USD" | "EUR")
-    : block.includes("$")
-    ? "USD"
-    : block.includes("€")
-    ? "EUR"
-    : "INR";
+  const currencyMatch = block.match(/Currency:\s*([A-Za-z]{3})/i);
+  const currency: string =
+    currencyMatch && isValidCurrencyCode(currencyMatch[1])
+      ? currencyMatch[1].toUpperCase()
+      : block.includes("$")
+      ? "USD"
+      : block.includes("€")
+      ? "EUR"
+      : block.includes("£")
+      ? "GBP"
+      : block.includes("¥")
+      ? "JPY"
+      : "INR";
 
   // ── isTaxInclusive flag ──
   // Stored in session context as "Tax Inclusive: true" when the invoice
@@ -252,8 +263,8 @@ function parseBlockToInvoice(block: string): ParsedInvoice | null {
 
   const gstMatch = block.match(/GST:\s*([\d.]+)%\s*(\w+)/i);
   const taxLineMatch = block.match(/Tax:\s*([\d.]+)%\s*(\w+)/i);
-  const totalMatch = block.match(/Total:\s*[₹$€]?([\d,]+)/i);
-  const subtotalMatch = block.match(/Subtotal:\s*[₹$€]?([\d,]+)/i);
+  const totalMatch = block.match(/Total:\s*[^\d]*?([\d,]+)/i);
+  const subtotalMatch = block.match(/Subtotal:\s*[^\d]*?([\d,]+)/i);
   const termsMatch = block.match(/Payment Terms:\s*(\d+)/i);
   const clientMatch = block.match(/Client:\s*(.+)/i);
   const monthMatch = block.match(/Invoice Month:\s*(.+)/i);
@@ -280,7 +291,7 @@ function parseBlockToInvoice(block: string): ParsedInvoice | null {
   const taxableAmount = subtotal - discountAmount;
   const gstAmount = total - taxableAmount;
 
-  if (currency === "INR") {
+  if (isIndianCurrency(currency)) {
     const gstPercent = parseFloat(gstMatch?.[1] ?? "0");
     const gstType =
       (gstMatch?.[2] ?? "CGST_SGST") === "IGST"
@@ -337,7 +348,7 @@ function parseBlockToInvoice(block: string): ParsedInvoice | null {
       : gstMatch
       ? parseFloat(gstMatch[1])
       : 0;
-    const taxLabel = taxLineMatch?.[2] || (currency === "EUR" ? "VAT" : "Tax");
+    const taxLabel = taxLineMatch?.[2] || getCurrencyInfo(currency).taxLabel;
     const taxAmount =
       gstAmount > 0 ? gstAmount : Math.round((subtotal * taxPercent) / 100);
     return {
@@ -566,9 +577,11 @@ export async function editorNode(
         taxableAmount: preTax,
         total: statedTotal, // total stays exactly as originally stated
       });
-      label = `Set ${taxChange.taxLabel} to ${rate}% (back-calculated from ${
-        currency === "EUR" ? "€" : "$"
-      }${statedTotal.toLocaleString("en-IN")} — total unchanged)`;
+      label = `Set ${
+        taxChange.taxLabel
+      } to ${rate}% (back-calculated from ${getCurrencySymbol(
+        currency
+      )}${statedTotal.toLocaleString("en-US")} — total unchanged)`;
     } else {
       // Standard add-on tax
       updated = recalculateTotals({
@@ -702,12 +715,11 @@ export async function editorNode(
   });
   const structured = model.withStructuredOutput(invoiceSchema);
 
-  const taxInfo =
-    currency === "INR"
-      ? `GST ${existing.gstPercent}% ${existing.gstType}`
-      : `${existing.taxLabel || (currency === "EUR" ? "VAT" : "Tax")} ${
-          existing.taxPercent ?? 0
-        }%`;
+  const taxInfo = isIndianCurrency(currency)
+    ? `GST ${existing.gstPercent}% ${existing.gstType}`
+    : `${existing.taxLabel || getCurrencyInfo(currency).taxLabel} ${
+        existing.taxPercent ?? 0
+      }%`;
 
   const formatted = EDITOR_PROMPT.replace("{prompt}", state.prompt)
     .replace("{clientName}", existing.clientName)
@@ -718,8 +730,8 @@ export async function editorNode(
     .replace("{discountValue}", String(existing.discountValue))
     .replace("{paymentTermsDays}", String(existing.paymentTermsDays))
     .replace("{notes}", existing.notes || "")
-    .replace("{subtotal}", existing.subtotal.toLocaleString("en-IN"))
-    .replace("{total}", existing.total.toLocaleString("en-IN"))
+    .replace("{subtotal}", formatCurrency(existing.subtotal, currency))
+    .replace("{total}", formatCurrency(existing.total, currency))
     .replace(
       "{lineItems}",
       formatLineItemsForPrompt(existing.lineItems, currency)
@@ -830,7 +842,7 @@ export async function editorNode(
       ...item,
       amount: item.quantity * item.rate,
     }));
-    const diff = diffLineItems(existing.lineItems, candidateItems);
+    const diff = diffLineItems(existing.lineItems, candidateItems, currency);
 
     if (!diff.hasRealChange) {
       return {

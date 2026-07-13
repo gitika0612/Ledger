@@ -5,11 +5,16 @@ TODAY: {currentDate}
 CURRENT MONTH: {currentMonth}
 
 ━━━ CURRENCY DETECTION ━━━
-Detect the invoice currency from the prompt:
+Detect the invoice currency from the prompt. Recognize ANY world currency, not just these — the ones below are common examples:
 • "$" or "USD" or "dollars" → currency="USD"
 • "€" or "EUR" or "euros"   → currency="EUR"
+• "£" or "GBP" or "pounds"  → currency="GBP"
+• "¥" or "JPY" or "yen"     → currency="JPY"
 • "₹" or "INR" or "Rs" or "rupees" or no symbol → currency="INR"
-• NEVER convert foreign currency to INR — keep amounts exactly as stated
+• A 3-letter ISO code appearing in the prompt (e.g. "AUD", "CAD", "SGD", "AED") → use that code directly
+• Any other recognizable currency symbol or name → use its ISO-4217 code
+• If truly nothing indicates a currency → default currency="INR"
+• NEVER convert one currency to another — keep amounts exactly as stated
 • "k"=×1000, "lakh"=×100000 (INR only)
 • $1 means ONE dollar. €1 means ONE euro. ₹1 means ONE rupee. Only multiply if "k" is explicit.
 
@@ -20,15 +25,11 @@ FOR INR INVOICES → use GST fields:
 • All gst/cgst/sgst/igst fields apply
 • taxPercent=0, taxAmount=0, taxLabel=""
 
-FOR USD INVOICES → use Tax fields:
-• taxLabel="Tax"
+FOR EVERY NON-INR CURRENCY (USD, EUR, GBP, JPY, AUD, or any other) → use Tax fields:
+• taxLabel = the conventional tax name for that currency's country (e.g. "Tax" for USD, "VAT" for EUR/GBP, "GST" for AUD/CAD/SGD/NZD — if unsure, use "Tax")
 • Default: taxPercent=0, taxAmount=0 (tax-free unless stated)
 • All GST fields = 0
-
-FOR EUR INVOICES → use Tax fields:
-• taxLabel="VAT"
-• Default: taxPercent=0, taxAmount=0 (tax-free unless stated)
-• All GST fields = 0
+• This rule applies identically regardless of which specific non-INR currency is used
 
 ━━━ CLIENT HISTORY ━━━
 {memoryContext}
@@ -144,10 +145,10 @@ PERCENTAGE SPLITS ARE NOT TAX SIGNALS — read this carefully:
 • "Invoice Rahul ₹1,00,000 — 40% design, 60% development, no GST" → gstPercent=0 (explicit "no GST" overrides the default), total=100000
 • The ONLY way gstPercent becomes 0 is an EXPLICIT tax signal in the prompt ("no GST", "0% GST", "tax exempt") — never because the prompt happens to contain percentage numbers for unrelated reasons.
 
-━━━ CRITICAL: GST/IGST ON EUR/USD INVOICES — READ THIS FIRST ━━━
-BEFORE applying any tax rule below, check: is the currency EUR or USD?
+━━━ CRITICAL: GST/IGST ON NON-INR INVOICES — READ THIS FIRST ━━━
+BEFORE applying any tax rule below, check: is the currency anything OTHER than INR?
 If YES → ALL tax keywords (GST, IGST, VAT, Tax) are treated as taxPercent/taxAmount/taxLabel.
-NEVER use gstPercent/gstAmount for EUR or USD invoices.
+NEVER use gstPercent/gstAmount for a non-INR invoice, no matter which currency it is.
 
 RATE SPECIFIED → back-calculate or add tax, set warning="" (empty):
 - "GST included at X%" on EUR → isTaxInclusive=TRUE, treat as "VAT included at X%" → back-calculate
@@ -161,8 +162,8 @@ RATE SPECIFIED → back-calculate or add tax, set warning="" (empty):
 
 NO RATE → set taxPercent=0, taxAmount=0, warning="Tax rate not specified — set to 0%. Please update if needed."
 
-━━━ TAX RULES (USD/EUR) ━━━
-Use taxPercent / taxAmount / taxLabel fields. Never touch GST fields for USD/EUR.
+━━━ TAX RULES (ANY NON-INR CURRENCY) ━━━
+Use taxPercent / taxAmount / taxLabel fields. Never touch GST fields for a non-INR currency.
 
 DETECTION RULES:
 • "with X% tax" / "with X% VAT" / "X% tax" / "X% VAT"
@@ -206,7 +207,7 @@ For isTaxInclusive=TRUE (back-calculated):
   • lineItem.amount = round(statedTotal ÷ (1 + taxRate/100))  ← PRE-TAX
   • subtotal = sum of lineItem amounts
   • For INR: gstAmount = statedTotal − subtotal
-  • For USD/EUR: taxAmount = statedTotal − subtotal
+  • For any non-INR currency: taxAmount = statedTotal − subtotal
   • total = statedTotal EXACTLY — never change it
   • Do NOT add tax on top again
 
@@ -218,7 +219,7 @@ For isTaxInclusive=FALSE (standard — tax added on top):
            CGST_SGST: cgst=sgst=round(gstAmount/2), igst=0
            IGST: igst=gstAmount, cgst=sgst=0
            total = taxableAmount + gstAmount
-  5. USD/EUR: taxAmount = round(taxableAmount × taxPercent / 100)
+  5. Any non-INR currency: taxAmount = round(taxableAmount × taxPercent / 100)
               total = taxableAmount + taxAmount
 
 ━━━ DATES ━━━
@@ -318,8 +319,7 @@ REPLACE ("replace X with Y" or "replace X to Y"):
 
 TAX/GST change:
 • INR invoice: update gstPercent/gstType, changedFields=["gstPercent","gstType"]
-• USD invoice: update taxPercent/taxAmount/taxLabel, changedFields=["taxPercent","taxAmount"]
-• EUR invoice: update taxPercent/taxAmount/taxLabel, changedFields=["taxPercent","taxAmount"]
+• Any non-INR invoice (USD, EUR, GBP, or any other currency): update taxPercent/taxAmount/taxLabel, changedFields=["taxPercent","taxAmount"]
 NOTE: The editor always ADDS tax on top of subtotal (isTaxInclusive=false for edits).
 "Set VAT to 18%" on an existing invoice → add 18% on top of current subtotal.
 
@@ -341,8 +341,8 @@ RECALCULATE after edit:
 2. discountAmount = percent→round(subtotal×val/100) | amount→val | none→0
 3. taxableAmount = subtotal − discountAmount
 4. INR: gstAmount = round(taxableAmount × gstPercent / 100), CGST_SGST or IGST split
-   USD/EUR: taxAmount = round(taxableAmount × taxPercent / 100)
-5. total = taxableAmount + gstAmount (INR) or taxableAmount + taxAmount (USD/EUR)`;
+   Any non-INR currency: taxAmount = round(taxableAmount × taxPercent / 100)
+5. total = taxableAmount + gstAmount (INR) or taxableAmount + taxAmount (non-INR)`;
 
 export const MULTI_INVOICE_PROMPT = `You are creating invoice #{index} of {total} in a batch.
 
@@ -361,10 +361,10 @@ currency = "{currency}"
 • Use EXACTLY invoiceMonth, invoiceDate, and currency as given above — never change them
 • Use the same tax%, payment terms, and description as the base request
 • For INR: use gstPercent from base request, set taxPercent=0
-• For USD/EUR: use taxPercent from base request, set gstPercent=0, taxLabel="Tax" or "VAT"
+• For any non-INR currency: use taxPercent from base request, set gstPercent=0, taxLabel="Tax", "VAT", or whatever is conventional for that currency
 • Do NOT combine months — this invoice is for {invoiceMonth} ONLY
 • Do NOT copy from previous invoices in the batch — parse fresh from base request
-• CRITICAL: If base request says "no tax" or has USD/EUR currency with no tax → taxPercent=0, gstPercent=0 for ALL invoices in batch
+• CRITICAL: If base request says "no tax" or has a non-INR currency with no tax → taxPercent=0, gstPercent=0 for ALL invoices in batch
 • CRITICAL: Do NOT add tax from memory/history — only use tax explicitly stated in base request
 • isTaxInclusive = false for all batch invoices (multi-invoice prompts always state base price)
 
@@ -411,7 +411,7 @@ MONTH RULES:
 
 TAX RULES FOR SUBPROMPTS:
 - Only include tax in a subPrompt if the original prompt explicitly mentions it for that client
-- If no tax mentioned for USD/EUR client → use "no tax" in the subPrompt
+- If no tax mentioned for a non-INR client (USD, EUR, GBP, or any other currency) → use "no tax" in the subPrompt
 - If no tax mentioned for INR client → use "with 18% CGST_SGST" (INR default — always CGST_SGST unless prompt says IGST)
 - NEVER invent a tax rate that was not in the original prompt
 - Mixed currency prompts: each client keeps their own currency and tax status

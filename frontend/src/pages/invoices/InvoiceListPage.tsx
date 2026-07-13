@@ -36,7 +36,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { SendInvoiceModal } from "@/components/invoice/modals/SendInvoiceModel";
 import { getClientByName, updateClientByName } from "@/lib/api/clientApi";
 import { toast } from "sonner";
-import { formatCurrency } from "@/lib/currency";
+import { formatCurrencyAmount as formatCurrency } from "@/lib/currencies";
 import { useAuth } from "@/hooks/useAuth";
 
 type InvoiceStatus = "draft" | "confirmed" | "sent" | "paid" | "overdue";
@@ -46,7 +46,7 @@ interface Invoice {
   _id: string;
   invoiceNumber: string;
   clientName: string;
-  currency?: "INR" | "USD" | "EUR";
+  currency?: string;
   lineItems: LineItem[];
   paymentTermsDays: number;
   gstPercent: number;
@@ -150,7 +150,7 @@ function formatDate(dateStr: string) {
     year: "numeric",
   });
 }
-function formatINR(amount: number, currency?: "INR" | "USD" | "EUR") {
+function formatINR(amount: number, currency?: string) {
   return formatCurrency(amount, currency ?? "INR");
 }
 

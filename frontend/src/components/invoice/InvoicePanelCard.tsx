@@ -9,6 +9,11 @@ import {
 import { ParsedInvoice } from "./InvoicePreviewCard";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import {
+  formatCurrencyAmount,
+  isIndianCurrency,
+  getCurrencyInfo,
+} from "@/lib/currencies";
 
 interface InvoicePanelCardProps {
   messageId: string;
@@ -23,12 +28,8 @@ interface InvoicePanelCardProps {
   onView: () => void;
 }
 
-function formatINR(amount: number) {
-  return new Intl.NumberFormat("en-IN", {
-    style: "currency",
-    currency: "INR",
-    maximumFractionDigits: 0,
-  }).format(amount);
+function formatINR(amount: number, currency?: string) {
+  return formatCurrencyAmount(amount, currency ?? "INR");
 }
 
 export function InvoicePanelCard({
@@ -84,7 +85,7 @@ export function InvoicePanelCard({
               : `${invoice.lineItems?.length || 0} item${
                   (invoice.lineItems?.length || 0) !== 1 ? "s" : ""
                 }`}{" "}
-            · {formatINR(invoice.total)}
+            · {formatINR(invoice.total, invoice.currency)}
           </p>
         </div>
 
@@ -109,7 +110,7 @@ export function InvoicePanelCard({
                   {item.description}
                 </span>
                 <span className="font-semibold text-gray-900 ml-2">
-                  {formatINR(item.amount)}
+                  {formatINR(item.amount, invoice.currency)}
                 </span>
               </div>
             ))}
@@ -120,30 +121,48 @@ export function InvoicePanelCard({
             <div className="flex justify-between text-xs">
               <span className="text-gray-400">Subtotal</span>
               <span className="text-gray-700">
-                {formatINR(invoice.subtotal)}
+                {formatINR(invoice.subtotal, invoice.currency)}
               </span>
             </div>
             <div className="flex justify-between text-xs">
-              <span className="text-gray-400">GST ({invoice.gstPercent}%)</span>
+              <span className="text-gray-400">
+                {isIndianCurrency(invoice.currency)
+                  ? `GST (${invoice.gstPercent}%)`
+                  : `${getCurrencyInfo(invoice.currency).taxLabel} (${
+                      invoice.taxPercent ?? 0
+                    }%)`}
+              </span>
               <span className="text-gray-700">
-                {formatINR(invoice.gstAmount)}
+                {formatINR(
+                  isIndianCurrency(invoice.currency)
+                    ? invoice.gstAmount
+                    : invoice.taxAmount ?? 0,
+                  invoice.currency
+                )}
               </span>
             </div>
             <Separator className="my-1" />
             <div className="flex justify-between text-xs font-bold">
               <span className="text-gray-900">Total</span>
               <span className="text-indigo-600">
-                {formatINR(invoice.total)}
+                {formatINR(invoice.total, invoice.currency)}
               </span>
             </div>
           </div>
 
-          {/* GST + Payment Terms */}
+          {/* GST/Tax + Payment Terms */}
           <div className="flex gap-2">
             <div className="flex-1 bg-white rounded-xl border border-gray-100 px-3 py-2 text-center">
-              <p className="text-xs text-gray-400">GST</p>
+              <p className="text-xs text-gray-400">
+                {isIndianCurrency(invoice.currency)
+                  ? "GST"
+                  : getCurrencyInfo(invoice.currency).taxLabel}
+              </p>
               <p className="text-xs font-semibold text-gray-900">
-                {invoice.gstPercent}%
+                {isIndianCurrency(invoice.currency)
+                  ? invoice.gstPercent
+                  : invoice.taxPercent ?? 0}
+                %
               </p>
             </div>
             <div className="flex-1 bg-white rounded-xl border border-gray-100 px-3 py-2 text-center">

@@ -2,6 +2,7 @@ import { ChatOpenAI } from "@langchain/openai";
 import { z } from "zod";
 import { InvoiceAgentState } from "../state";
 import { Invoice } from "../../models/Invoice";
+import { formatCurrencyAmount } from "../../lib/currencies";
 
 const querySchema = z.object({
   queryType: z.enum([
@@ -28,8 +29,7 @@ const querySchema = z.object({
 type QueryType = z.infer<typeof querySchema>["queryType"];
 
 function formatCurrency(amount: number, currency = "INR"): string {
-  const symbol = currency === "USD" ? "$" : currency === "EUR" ? "€" : "₹";
-  return `${symbol}${amount.toLocaleString("en-IN")}`;
+  return formatCurrencyAmount(amount, currency);
 }
 
 function formatDate(date: Date | string): string {

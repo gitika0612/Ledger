@@ -71,7 +71,7 @@ export interface RecentInvoice {
   invoiceNumber: string;
   clientName: string;
   total: number;
-  currency?: "INR" | "USD" | "EUR";
+  currency?: string;
   status: "draft" | "confirmed" | "sent" | "paid" | "overdue";
 }
 

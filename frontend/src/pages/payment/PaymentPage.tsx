@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { Loader2, AlertTriangle, ShieldCheck, Zap, Lock } from "lucide-react";
 import api from "@/lib/api/api";
+import { formatCurrencyAmount, getCurrencyInfo } from "@/lib/currencies";
 
 interface LineItem {
   description: string;
@@ -36,14 +37,11 @@ interface PublicInvoice {
   status: string;
   notes?: string;
   currency: string;
+  onlinePaymentAvailable: boolean;
 }
 
 function formatCurrency(amount: number, currency = "INR") {
-  return new Intl.NumberFormat("en-IN", {
-    style: "currency",
-    currency,
-    maximumFractionDigits: 0,
-  }).format(amount);
+  return formatCurrencyAmount(amount, currency);
 }
 
 function formatDate(dateStr: string) {
@@ -60,6 +58,11 @@ export function PaymentPage() {
   const [loading, setLoading] = useState(true);
   const [paying, setPaying] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Separate from `error` above (which fully replaces the page for "invoice
+  // not found"/load failures). A failed payment ATTEMPT should never hide the
+  // invoice the customer already loaded — it's rendered inline near the Pay
+  // button instead.
+  const [payError, setPayError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!id) return;
@@ -73,13 +76,23 @@ export function PaymentPage() {
   const handlePay = async () => {
     if (!invoice) return;
     setPaying(true);
+    setPayError(null);
     try {
       const res = await api.post("/payments/create-checkout-session", {
         invoiceId: invoice._id,
       });
       window.location.href = res.data.url;
-    } catch {
-      setError("Failed to initiate payment. Please try again.");
+    } catch (err: any) {
+      // Surface the backend's specific reason when it gave one (e.g. the
+      // "this currency isn't available" backstop) instead of always showing
+      // a generic "try again" — retrying a currency-settlement failure will
+      // never succeed.
+      const backendMessage = err?.response?.data?.error;
+      setPayError(
+        typeof backendMessage === "string"
+          ? backendMessage
+          : "Failed to initiate payment. Please try again."
+      );
       setPaying(false);
     }
   };
@@ -295,8 +308,7 @@ export function PaymentPage() {
             {(invoice.taxAmount || 0) > 0 && (
               <div style={styles.totalRow}>
                 <span style={styles.totalLabel}>
-                  {invoice.taxLabel ||
-                    (invoice.currency === "EUR" ? "VAT" : "Tax")}
+                  {invoice.taxLabel || getCurrencyInfo(invoice.currency).taxLabel}
                   {(invoice.taxPercent || 0) > 0
                     ? ` (${invoice.taxPercent}%)`
                     : ""}
@@ -340,35 +352,54 @@ export function PaymentPage() {
             </div>
           )}
 
-          {/* Pay button */}
-          <button
-            onClick={handlePay}
-            disabled={paying}
-            style={{
-              ...styles.payButton,
-              opacity: paying ? 0.7 : 1,
-              cursor: paying ? "not-allowed" : "pointer",
-            }}
-          >
-            {paying ? (
-              <span
+          {/* Pay button — or a calm "can't pay online" notice when this
+              currency isn't one the receiving Stripe account settles */}
+          {invoice.onlinePaymentAvailable ? (
+            <>
+              <button
+                onClick={handlePay}
+                disabled={paying}
                 style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  justifyContent: "center",
+                  ...styles.payButton,
+                  opacity: paying ? 0.7 : 1,
+                  cursor: paying ? "not-allowed" : "pointer",
                 }}
               >
-                <Loader2
-                  size={16}
-                  style={{ animation: "spin 1s linear infinite" }}
-                />
-                Redirecting to payment...
-              </span>
-            ) : (
-              `Pay ${formatCurrency(invoice.total, invoice.currency)}`
-            )}
-          </button>
+                {paying ? (
+                  <span
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      justifyContent: "center",
+                    }}
+                  >
+                    <Loader2
+                      size={16}
+                      style={{ animation: "spin 1s linear infinite" }}
+                    />
+                    Redirecting to payment...
+                  </span>
+                ) : (
+                  `Pay ${formatCurrency(invoice.total, invoice.currency)}`
+                )}
+              </button>
+              {payError && <p style={styles.payErrorText}>{payError}</p>}
+            </>
+          ) : (
+            <div style={styles.unavailableBox}>
+              <AlertTriangle
+                size={15}
+                color="#9ca3af"
+                style={{ flexShrink: 0, marginTop: 1 }}
+              />
+              <p style={styles.unavailableText}>
+                Online payment isn't available for this currency (
+                {invoice.currency}). Please contact the sender to arrange
+                payment.
+              </p>
+            </div>
+          )}
 
           {/* Trust badges */}
           <div style={styles.trustRow}>
@@ -577,6 +608,28 @@ const styles: Record<string, React.CSSProperties> = {
     letterSpacing: "-0.2px",
     transition: "background 0.15s ease",
     marginTop: 4,
+  },
+  payErrorText: {
+    fontSize: 12.5,
+    color: "#dc2626",
+    marginTop: 8,
+    textAlign: "center",
+    lineHeight: 1.5,
+  },
+  unavailableBox: {
+    display: "flex",
+    alignItems: "flex-start",
+    gap: 8,
+    background: "#f9fafb",
+    border: "1px solid #e5e7eb",
+    borderRadius: 10,
+    padding: "14px 16px",
+    marginTop: 4,
+  },
+  unavailableText: {
+    fontSize: 13,
+    color: "#6b7280",
+    lineHeight: 1.5,
   },
   trustRow: {
     display: "flex",

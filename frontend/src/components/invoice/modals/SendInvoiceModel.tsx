@@ -30,7 +30,7 @@ import {
   ParsedInvoice,
   LineItem,
 } from "@/components/invoice/InvoicePreviewCard";
-import { formatCurrency } from "@/lib/currency";
+import { formatCurrencyAmount as formatCurrency } from "@/lib/currencies";
 
 interface InvoiceForPDF {
   clientName: string;
@@ -54,7 +54,7 @@ interface InvoiceForPDF {
   total: number;
   invoiceDate?: string;
   invoiceMonth?: string;
-  currency?: "INR" | "USD" | "EUR";
+  currency?: string;
 }
 
 import api from "@/lib/api/api";

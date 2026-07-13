@@ -17,7 +17,13 @@ import { useAuth, UserProfile } from "@/hooks/useAuth";
 import { getClientByName, upsertClient, ClientAPI } from "@/lib/api/clientApi";
 import { useUser } from "@clerk/clerk-react";
 import { updateInvoice } from "@/lib/api/invoiceApi";
-import { formatCurrency as formatCurrencyUtil } from "@/lib/currency";
+import {
+  formatCurrencyAmount,
+  getCurrencySymbol,
+  isIndianCurrency,
+  getCurrencyInfo,
+} from "@/lib/currencies";
+import { CurrencyPicker } from "@/components/invoice/CurrencyPicker";
 
 export interface LineItem {
   description: string;
@@ -57,7 +63,7 @@ export interface ParsedInvoice {
   paymentTermsDays: number;
   invoiceDate?: string;
   invoiceMonth?: string;
-  currency?: "INR" | "USD" | "EUR";
+  currency?: string;
 }
 
 interface InvoicePreviewCardProps {
@@ -200,11 +206,8 @@ function UnitSelector({
   );
 }
 
-function formatCurrency(
-  amount: number,
-  currency?: "INR" | "USD" | "EUR"
-): string {
-  return formatCurrencyUtil(amount, currency ?? "INR");
+function formatCurrency(amount: number, currency?: string): string {
+  return formatCurrencyAmount(amount, currency ?? "INR");
 }
 
 function getInvoiceDates(invoice: ParsedInvoice) {
@@ -264,7 +267,7 @@ function recalculateInvoiceTotals(invoice: ParsedInvoice): ParsedInvoice {
   const taxableAmount = subtotal - discountAmount;
   const currency = invoice.currency ?? "INR";
 
-  if (currency === "INR") {
+  if (isIndianCurrency(currency)) {
     // ── INR: GST path ──
     const gstAmount = Math.round(
       (taxableAmount * (invoice.gstPercent ?? 0)) / 100
@@ -297,10 +300,10 @@ function recalculateInvoiceTotals(invoice: ParsedInvoice): ParsedInvoice {
       total: taxableAmount + gstAmount,
     };
   } else {
-    // ── USD/EUR: Tax/VAT path ──
+    // ── Non-INR: Tax/VAT path ──
     const taxPercent = invoice.taxPercent ?? 0;
     const taxAmount = Math.round((taxableAmount * taxPercent) / 100);
-    const taxLabel = invoice.taxLabel || (currency === "EUR" ? "VAT" : "Tax");
+    const taxLabel = invoice.taxLabel || getCurrencyInfo(currency).taxLabel;
     return {
       ...invoice,
       subtotal,
@@ -576,7 +579,7 @@ export function InvoicePreviewCard({
 
   // Currency for display — use current invoice's currency
   const currency = current.currency ?? "INR";
-  const isINR = currency === "INR";
+  const isINR = isIndianCurrency(currency);
 
   return (
     <div className="bg-white rounded-2xl overflow-hidden w-full border border-gray-100 shadow-sm">
@@ -704,30 +707,20 @@ export function InvoicePreviewCard({
               Invoice Settings
             </p>
             <div className="grid grid-cols-2 gap-3">
-              {/* Currency badge — read only in edit mode */}
+              {/* Currency picker */}
               <div className="col-span-2">
                 <Label className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1 block">
                   Currency
                 </Label>
-                <div className="flex gap-2">
-                  {(["INR", "USD", "EUR"] as const).map((c) => (
-                    <button
-                      key={c}
-                      onClick={() => handleFieldChange("currency", c)}
-                      className={`px-4 h-9 rounded-xl text-xs font-semibold border transition-all ${
-                        (editedInvoice.currency ?? "INR") === c
-                          ? "bg-indigo-50 border-indigo-200 text-indigo-700"
-                          : "bg-gray-50 border-gray-200 text-gray-500 hover:bg-gray-100"
-                      }`}
-                    >
-                      {c === "INR" ? "₹ INR" : c === "USD" ? "$ USD" : "€ EUR"}
-                    </button>
-                  ))}
-                </div>
+                <CurrencyPicker
+                  value={editedInvoice.currency ?? "INR"}
+                  onChange={(c) => handleFieldChange("currency", c)}
+                  className="max-w-[220px]"
+                />
               </div>
 
               {/* GST — only for INR */}
-              {(editedInvoice.currency ?? "INR") === "INR" && (
+              {isIndianCurrency(editedInvoice.currency) && (
                 <>
                   <div>
                     <Label className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1 block">
@@ -788,11 +781,11 @@ export function InvoicePreviewCard({
                 </>
               )}
 
-              {/* Tax % field — USD/EUR only */}
-              {(editedInvoice.currency ?? "INR") !== "INR" && (
+              {/* Tax % field — any non-INR currency */}
+              {!isIndianCurrency(editedInvoice.currency) && (
                 <div className="col-span-2">
                   <Label className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1 block">
-                    {editedInvoice.currency === "EUR" ? "VAT %" : "Tax %"}
+                    {getCurrencyInfo(editedInvoice.currency).taxLabel} %
                   </Label>
                   <Input
                     type="number"
@@ -811,7 +804,7 @@ export function InvoicePreviewCard({
                       handleFieldChange("taxPercent", v);
                     }}
                     placeholder={`Enter ${
-                      editedInvoice.currency === "EUR" ? "VAT" : "Tax"
+                      getCurrencyInfo(editedInvoice.currency).taxLabel
                     } %`}
                     className="rounded-xl text-sm focus-visible:ring-indigo-400"
                   />
@@ -885,13 +878,7 @@ export function InvoicePreviewCard({
                         ? "No discount"
                         : type === "percent"
                         ? "%"
-                        : `${
-                            currency === "USD"
-                              ? "$"
-                              : currency === "EUR"
-                              ? "€"
-                              : "₹"
-                          } Fixed`}
+                        : `${getCurrencySymbol(currency)} Fixed`}
                     </button>
                   ))}
                   {editedInvoice.discountType &&
@@ -994,7 +981,7 @@ export function InvoicePreviewCard({
                     </div>
 
                     {/* HSN/SAC — only show for INR */}
-                    {(editedInvoice.currency ?? "INR") === "INR" && (
+                    {isIndianCurrency(editedInvoice.currency) && (
                       <div className="mb-2">
                         <p className="text-xs text-gray-400 mb-1">
                           HSN/SAC Code
@@ -1093,13 +1080,7 @@ export function InvoicePreviewCard({
                       </div>
                       <div>
                         <p className="text-xs text-gray-400 mb-1">
-                          Rate (
-                          {currency === "USD"
-                            ? "$"
-                            : currency === "EUR"
-                            ? "€"
-                            : "₹"}
-                          )
+                          Rate ({getCurrencySymbol(currency)})
                         </p>
                         <Input
                           type="number"
@@ -1251,7 +1232,7 @@ export function InvoicePreviewCard({
               <p className="text-xs text-gray-300 mt-0.5">Draft</p>
             )}
             {/* Currency badge */}
-            {currency !== "INR" && (
+            {!isIndianCurrency(currency) && (
               <span className="inline-block mt-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-600 border border-indigo-100">
                 {currency}
               </span>
@@ -1506,7 +1487,7 @@ export function InvoicePreviewCard({
             {!isINR && (current.taxAmount || 0) > 0 && (
               <div className="flex justify-between">
                 <span className="text-xs text-gray-500">
-                  {current.taxLabel || (currency === "EUR" ? "VAT" : "Tax")}
+                  {current.taxLabel || getCurrencyInfo(currency).taxLabel}
                   {(current.taxPercent || 0) > 0
                     ? ` (${current.taxPercent}%)`
                     : ""}

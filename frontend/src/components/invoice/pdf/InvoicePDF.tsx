@@ -9,6 +9,11 @@ import {
 } from "@react-pdf/renderer";
 import { ParsedInvoice } from "../InvoicePreviewCard";
 import { UserProfile } from "@/hooks/useAuth";
+import {
+  formatCurrencyAmount,
+  isIndianCurrency,
+  getCurrencyInfo,
+} from "@/lib/currencies";
 
 const styles = StyleSheet.create({
   page: {
@@ -214,12 +219,8 @@ interface InvoicePDFProps {
   profile?: UserProfile | null;
 }
 
-function formatINR(
-  amount: number,
-  currency: "INR" | "USD" | "EUR" = "INR"
-): string {
-  const symbol = currency === "USD" ? "$" : currency === "EUR" ? "€" : "₹";
-  return `${symbol}${amount.toLocaleString("en-IN")}`;
+function formatINR(amount: number, currency: string = "INR"): string {
+  return formatCurrencyAmount(amount, currency);
 }
 
 function getInvoiceDates(invoice: ParsedInvoice) {
@@ -268,7 +269,7 @@ export function InvoicePDF({
 
   // Currency helpers
   const currency = invoice.currency ?? "INR";
-  const isINR = currency === "INR";
+  const isINR = isIndianCurrency(currency);
 
   const hasDiscount =
     invoice.discountType &&
@@ -475,7 +476,7 @@ export function InvoicePDF({
           {!isINR && (invoice.taxAmount || 0) > 0 && (
             <View style={styles.totalRow}>
               <Text style={styles.totalLabel}>
-                {invoice.taxLabel || (currency === "EUR" ? "VAT" : "Tax")}
+                {invoice.taxLabel || getCurrencyInfo(currency).taxLabel}
                 {(invoice.taxPercent || 0) > 0
                   ? ` (${invoice.taxPercent}%)`
                   : ""}

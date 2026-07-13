@@ -168,7 +168,7 @@ export async function pendingReplyNode(
             targetInvoice = {
               clientName: last.clientName,
               lineItems: last.lineItems,
-              currency: (last.currency ?? "INR") as "INR" | "USD" | "EUR",
+              currency: last.currency ?? "INR",
               gstPercent: last.gstPercent,
               gstType: last.gstType as "IGST" | "CGST_SGST",
               paymentTermsDays: last.paymentTermsDays,

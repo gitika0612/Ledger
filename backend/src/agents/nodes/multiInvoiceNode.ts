@@ -13,6 +13,27 @@ import {
 import { findClientMatch } from "../../lib/clientMatcher";
 import { buildCurrencyContext } from "../utils/currencyService";
 import { recalculateTotals, formatCurrency } from "../utils/invoiceUtils";
+import {
+  isIndianCurrency,
+  getCurrencyInfo,
+  getCurrencySymbol,
+  isValidCurrencyCode,
+} from "../../lib/currencies";
+
+const CURRENCY_SYMBOL_MAP: Record<string, string> = {
+  "$": "USD",
+  "€": "EUR",
+  "£": "GBP",
+  "₹": "INR",
+  "¥": "JPY",
+  "₩": "KRW",
+  "₦": "NGN",
+  "₽": "RUB",
+  "₺": "TRY",
+  "₴": "UAH",
+  "₫": "VND",
+  "₱": "PHP",
+};
 
 const MONTH_NAMES = [
   "January",
@@ -195,9 +216,14 @@ function extractClientName(prompt: string): string {
   return "Client";
 }
 
-function detectCurrency(prompt: string): "INR" | "USD" | "EUR" {
-  if (/\$|USD|dollars?/i.test(prompt)) return "USD";
-  if (/€|EUR|euros?/i.test(prompt)) return "EUR";
+function detectCurrency(prompt: string): string {
+  for (const [symbol, code] of Object.entries(CURRENCY_SYMBOL_MAP)) {
+    if (prompt.includes(symbol)) return code;
+  }
+  const codeMatch = prompt.match(/\b[A-Z]{3}\b/);
+  if (codeMatch && isValidCurrencyCode(codeMatch[0])) return codeMatch[0];
+  if (/USD|dollars?/i.test(prompt)) return "USD";
+  if (/EUR|euros?/i.test(prompt)) return "EUR";
   return "INR";
 }
 
@@ -226,6 +252,13 @@ function extractPerInvoiceAmount(prompt: string): number | null {
   if (m3) return parseFloat(m3[1].replace(/,/g, ""));
   const m4 = prompt.match(/€([0-9,]+(?:\.[0-9]+)?)/);
   if (m4) return parseFloat(m4[1].replace(/,/g, ""));
+  // Fall back to any other known currency symbol (£, ¥, ₩, etc.)
+  for (const symbol of Object.keys(CURRENCY_SYMBOL_MAP)) {
+    if (symbol === "$" || symbol === "€" || symbol === "₹") continue;
+    const escaped = symbol.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const m = prompt.match(new RegExp(`${escaped}([0-9,]+(?:\\.[0-9]+)?)`));
+    if (m) return parseFloat(m[1].replace(/,/g, ""));
+  }
   return null;
 }
 
@@ -297,18 +330,16 @@ export async function multiInvoiceNode(
       state.prompt
     );
 
-  const gstPercent =
-    currency === "INR"
-      ? noTaxMentioned
-        ? 0
-        : detectGstPercent(state.prompt)
-      : 0;
-  const taxPercent =
-    currency !== "INR"
-      ? noTaxMentioned
-        ? 0
-        : detectTaxPercent(state.prompt)
-      : 0;
+  const gstPercent = isIndianCurrency(currency)
+    ? noTaxMentioned
+      ? 0
+      : detectGstPercent(state.prompt)
+    : 0;
+  const taxPercent = !isIndianCurrency(currency)
+    ? noTaxMentioned
+      ? 0
+      : detectTaxPercent(state.prompt)
+    : 0;
 
   // ── Step 4: Generate invoices ──
   const invoiceStructured = model.withStructuredOutput(invoiceSchema);
@@ -326,18 +357,16 @@ export async function multiInvoiceNode(
   if (isMultiClient) {
     for (const subPrompt of detection.subPrompts) {
       const subCurrency = detectCurrency(subPrompt);
-      const subGstPercent =
-        subCurrency === "INR"
-          ? /no\s*(gst|tax)/i.test(subPrompt)
-            ? 0
-            : detectGstPercent(subPrompt)
-          : 0;
-      const subTaxPercent =
-        subCurrency !== "INR"
-          ? /no\s*(tax|vat)/i.test(subPrompt)
-            ? 0
-            : detectTaxPercent(subPrompt)
-          : 0;
+      const subGstPercent = isIndianCurrency(subCurrency)
+        ? /no\s*(gst|tax)/i.test(subPrompt)
+          ? 0
+          : detectGstPercent(subPrompt)
+        : 0;
+      const subTaxPercent = !isIndianCurrency(subCurrency)
+        ? /no\s*(tax|vat)/i.test(subPrompt)
+          ? 0
+          : detectTaxPercent(subPrompt)
+        : 0;
 
       const formatted = fillTemplate(GENERATOR_PROMPT, {
         prompt: esc(subPrompt),
@@ -362,13 +391,19 @@ export async function multiInvoiceNode(
         gstPercent: subGstPercent,
         gstType: raw.gstType ?? "CGST_SGST",
         taxPercent: subTaxPercent,
-        taxLabel:
-          subCurrency === "EUR" ? "VAT" : subCurrency === "USD" ? "Tax" : "",
+        taxLabel: isIndianCurrency(subCurrency)
+          ? ""
+          : getCurrencyInfo(subCurrency).taxLabel,
       });
 
       // ── Enforce stated amount from subprompt ──
+      const currencySymbolsPattern = Object.keys(CURRENCY_SYMBOL_MAP)
+        .map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+        .join("");
       const subAmounts = [
-        ...subPrompt.matchAll(/[₹$€]([0-9,]+(?:\.[0-9]+)?)/g),
+        ...subPrompt.matchAll(
+          new RegExp(`[${currencySymbolsPattern}]([0-9,]+(?:\\.[0-9]+)?)`, "g")
+        ),
       ];
       if (subAmounts.length === 1 && enforced.lineItems?.length > 0) {
         const subStatedBase = parseInt(subAmounts[0][1].replace(/,/g, ""));
@@ -399,9 +434,9 @@ export async function multiInvoiceNode(
     }
   } else {
     let basePromptWithTax = state.prompt;
-    if (currency === "INR" && !hasExplicitTax && !noTaxMentioned) {
+    if (isIndianCurrency(currency) && !hasExplicitTax && !noTaxMentioned) {
       basePromptWithTax = `${state.prompt} with 18% CGST_SGST`;
-    } else if (currency !== "INR" && noTaxMentioned) {
+    } else if (!isIndianCurrency(currency) && noTaxMentioned) {
       basePromptWithTax = `${state.prompt} no tax`;
     }
 
@@ -427,12 +462,12 @@ export async function multiInvoiceNode(
         invoiceMonth,
         invoiceDate,
         currency,
-        gstPercent: currency === "INR" ? gstPercent : 0,
+        gstPercent: isIndianCurrency(currency) ? gstPercent : 0,
         gstType:
           raw.gstType === "IGST" && !/igst|inter.state/i.test(state.prompt)
             ? "CGST_SGST"
             : raw.gstType,
-        taxPercent: currency !== "INR" ? taxPercent : 0,
+        taxPercent: !isIndianCurrency(currency) ? taxPercent : 0,
       });
 
       // ── Enforce stated amount — LLM sometimes hallucinates different amounts ──

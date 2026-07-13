@@ -1,4 +1,9 @@
 import { ParsedInvoice } from "../schemas/invoiceSchema";
+import {
+  isIndianCurrency,
+  getCurrencyInfo,
+  formatCurrencyAmount,
+} from "../../lib/currencies";
 
 /**
  * Recalculates all totals from line items.
@@ -42,8 +47,9 @@ export function recalculateTotals(invoice: ParsedInvoice): ParsedInvoice {
   // ── TAX-INCLUSIVE PATH ──
   if (invoice.isTaxInclusive) {
     const statedTotal = invoice.total;
-    const taxRate =
-      currency === "INR" ? invoice.gstPercent ?? 0 : invoice.taxPercent ?? 0;
+    const taxRate = isIndianCurrency(currency)
+      ? invoice.gstPercent ?? 0
+      : invoice.taxPercent ?? 0;
 
     // If LLM forgot to back-calculate lineItems (they still sum to total),
     // fix them now using the tax rate.
@@ -68,7 +74,7 @@ export function recalculateTotals(invoice: ParsedInvoice): ParsedInvoice {
         : 0;
     const taxableAmount = subtotal - discountAmount;
 
-    if (currency === "INR") {
+    if (isIndianCurrency(currency)) {
       const gstPercent = invoice.gstPercent ?? 0;
       const gstAmount = gstPercent > 0 ? statedTotal - subtotal : 0;
       const gstType = invoice.gstType || "CGST_SGST";
@@ -97,7 +103,7 @@ export function recalculateTotals(invoice: ParsedInvoice): ParsedInvoice {
       const taxPercent = invoice.taxPercent ?? 0;
       const taxAmount =
         taxPercent > 0 ? statedTotal - subtotal : invoice.taxAmount ?? 0;
-      const taxLabel = invoice.taxLabel || (currency === "EUR" ? "VAT" : "Tax");
+      const taxLabel = invoice.taxLabel || getCurrencyInfo(currency).taxLabel;
       return {
         ...invoice,
         lineItems,
@@ -130,7 +136,7 @@ export function recalculateTotals(invoice: ParsedInvoice): ParsedInvoice {
       : 0;
   const taxableAmount = subtotal - discountAmount;
 
-  if (currency === "INR") {
+  if (isIndianCurrency(currency)) {
     const gstPercent = invoice.gstPercent ?? 0;
     const gstAmount = Math.round((taxableAmount * gstPercent) / 100);
     const gstType = invoice.gstType || "CGST_SGST";
@@ -156,7 +162,7 @@ export function recalculateTotals(invoice: ParsedInvoice): ParsedInvoice {
   } else {
     const taxPercent = invoice.taxPercent ?? 0;
     const taxAmount = Math.round((taxableAmount * taxPercent) / 100);
-    const taxLabel = invoice.taxLabel || (currency === "EUR" ? "VAT" : "Tax");
+    const taxLabel = invoice.taxLabel || getCurrencyInfo(currency).taxLabel;
     return {
       ...invoice,
       lineItems,
@@ -179,7 +185,8 @@ export function recalculateTotals(invoice: ParsedInvoice): ParsedInvoice {
 
 export function diffLineItems(
   oldItems: Array<{ description: string; quantity: number; rate: number }>,
-  newItems: Array<{ description: string; quantity: number; rate: number }>
+  newItems: Array<{ description: string; quantity: number; rate: number }>,
+  currency?: string
 ): { summary: string; hasRealChange: boolean } {
   const key = (d: string) => d.toLowerCase().trim();
   const added: string[] = [];
@@ -197,8 +204,9 @@ export function diffLineItems(
       Math.abs(oldMatch.rate - newItem.rate) > 0.01
     ) {
       modified.push(
-        `**${newItem.description}** (${newItem.rate.toLocaleString(
-          "en-IN"
+        `**${newItem.description}** (${formatCurrencyAmount(
+          newItem.rate,
+          currency
         )} × ${newItem.quantity})`
       );
     }
@@ -229,11 +237,6 @@ export function diffLineItems(
   };
 }
 
-export function formatCurrency(
-  amount: number,
-  currency: "INR" | "USD" | "EUR" = "INR"
-): string {
-  const abs = Math.abs(amount).toLocaleString("en-IN");
-  const symbol = currency === "USD" ? "$" : currency === "EUR" ? "€" : "₹";
-  return amount < 0 ? `−${symbol}${abs}` : `${symbol}${abs}`;
+export function formatCurrency(amount: number, currency?: string | null): string {
+  return formatCurrencyAmount(amount, currency);
 }

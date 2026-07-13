@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { CURRENCY_CODES } from "../../lib/currencies";
 
 export const lineItemSchema = z.object({
   description: z.string(),
@@ -21,7 +22,10 @@ export const invoiceSchema = z.object({
   intent: z.enum(["new", "edit", "copy"]),
   targetInvoiceRef: z.string(),
   clientName: z.string(),
-  currency: z.enum(["INR", "USD", "EUR"]).default("INR"),
+  currency: z
+    .enum(CURRENCY_CODES as [string, ...string[]])
+    .catch("INR")
+    .default("INR"),
   lineItems: z.array(lineItemSchema),
 
   // ── INR GST fields (only populated when currency=INR) ──

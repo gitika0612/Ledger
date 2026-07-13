@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import {
   FileText,
   ChevronRight,
@@ -6,6 +6,7 @@ import {
   ChevronDown,
   ChevronUp,
   ArrowUpDown,
+  AlertTriangle,
 } from "lucide-react";
 import { ParsedInvoice } from "./InvoicePreviewCard";
 import { InvoicePreviewCard } from "./InvoicePreviewCard";
@@ -21,7 +22,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { formatCurrency } from "@/lib/currency";
+import {
+  formatCurrencyAmount as formatCurrency,
+  isIndianCurrency,
+  getCurrencyInfo,
+} from "@/lib/currencies";
+import { getExchangeRates, sumInUSD } from "@/lib/exchangeRates";
 
 export interface SessionInvoice {
   messageId: string;
@@ -48,17 +54,17 @@ interface InvoicePanelProps {
 type SortOption = "newest" | "oldest" | "highest" | "lowest" | "az";
 type StatusFilter = "draft" | "confirmed";
 
-function formatINR(amount: number, currency?: "INR" | "USD" | "EUR") {
+function formatINR(amount: number, currency?: string) {
   return formatCurrency(amount, currency ?? "INR");
 }
 
 // ── Currency-aware tax label for mini card ──
 function getTaxLabel(invoice: ParsedInvoice): string {
   const currency = invoice.currency ?? "INR";
-  if (currency === "INR") {
+  if (isIndianCurrency(currency)) {
     return `GST ${invoice.gstPercent ?? 0}%`;
   }
-  const label = invoice.taxLabel || (currency === "EUR" ? "VAT" : "Tax");
+  const label = invoice.taxLabel || getCurrencyInfo(currency).taxLabel;
   return `${label} ${invoice.taxPercent ?? 0}%`;
 }
 
@@ -151,6 +157,17 @@ export function InvoicePanel({
     Record<string, boolean>
   >({});
   const [sendingMessageId, setSendingMessageId] = useState<string | null>(null);
+  const [rates, setRates] = useState<Record<string, number> | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    getExchangeRates().then((r) => {
+      if (!cancelled) setRates(r);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const sendingInvoice = sendingMessageId
     ? sessionInvoices.find((s) => s.messageId === sendingMessageId) ?? null
@@ -232,6 +249,25 @@ export function InvoicePanel({
     () => sortMonthKeys(Object.keys(grouped)),
     [grouped]
   );
+
+  // Per-month-group total, converted to a single USD figure (mirrors the
+  // Dashboard's mixed-currency handling) — reuses the same shared
+  // getExchangeRates/sumInUSD helpers, no second conversion path.
+  const groupUsdTotals = useMemo(() => {
+    if (!rates) return null;
+    const result: Record<string, { total: number; hasUnconverted: boolean }> =
+      {};
+    Object.entries(grouped).forEach(([key, items]) => {
+      result[key] = sumInUSD(
+        items.map((si) => ({
+          _id: si.invoice.currency ?? "INR",
+          total: si.invoice.total,
+        })),
+        rates
+      );
+    });
+    return result;
+  }, [grouped, rates]);
   const hasFilters =
     search || selectedClients.size > 0 || selectedMonths.size > 0;
 
@@ -466,15 +502,29 @@ export function InvoicePanel({
                             </span>
                           </div>
                           <div className="flex items-center gap-2">
-                            <span className="text-xs font-semibold text-gray-500">
-                              {formatINR(
-                                items.reduce(
-                                  (sum, si) => sum + si.invoice.total,
-                                  0
-                                ),
-                                items[0]?.invoice.currency
-                              )}
-                            </span>
+                            {groupUsdTotals ? (
+                              <span className="text-xs font-semibold text-gray-500 inline-flex items-center gap-1">
+                                {formatCurrency(
+                                  groupUsdTotals[group]?.total ?? 0,
+                                  "USD"
+                                )}
+                                <span className="text-[9px] text-gray-400 font-medium">
+                                  USD
+                                </span>
+                                {groupUsdTotals[group]?.hasUnconverted && (
+                                  <span
+                                    title="Some amounts couldn't be converted to USD (missing exchange rate) and were excluded from this total."
+                                    className="inline-flex"
+                                  >
+                                    <AlertTriangle className="w-3 h-3 text-amber-500 flex-shrink-0" />
+                                  </span>
+                                )}
+                              </span>
+                            ) : (
+                              <span className="text-xs font-semibold text-gray-300">
+                                …
+                              </span>
+                            )}
                             {isGroupCollapsed ? (
                               <ChevronDown className="w-3 h-3 text-gray-300 group-hover:text-gray-400" />
                             ) : (

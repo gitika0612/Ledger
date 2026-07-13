@@ -1,4 +1,5 @@
 import { Resend } from "resend";
+import { normalizeCurrencyCode } from "./currencies";
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
@@ -11,7 +12,7 @@ export interface SendInvoiceEmailParams {
   dueDate: Date;
   pdfBuffer: Buffer;
   invoiceId: string;
-  currency?: "INR" | "USD" | "EUR";
+  currency?: string;
 }
 
 export interface SendReminderEmailParams {
@@ -22,32 +23,24 @@ export interface SendReminderEmailParams {
   total: number;
   dueDate: Date;
   invoiceId: string;
-  currency?: "INR" | "USD" | "EUR";
+  currency?: string;
   reminderNumber: 1 | 2 | 3;
   daysOverdue: number;
 }
 
-function formatAmount(
-  amount: number,
-  currency: "INR" | "USD" | "EUR" = "INR"
-): string {
-  if (currency === "USD")
+function formatAmount(amount: number, currency?: string): string {
+  const code = normalizeCurrencyCode(currency);
+  try {
     return new Intl.NumberFormat("en-US", {
       style: "currency",
-      currency: "USD",
+      currency: code,
       maximumFractionDigits: 0,
     }).format(amount);
-  if (currency === "EUR")
-    return new Intl.NumberFormat("en-IE", {
-      style: "currency",
-      currency: "EUR",
-      maximumFractionDigits: 0,
-    }).format(amount);
-  return new Intl.NumberFormat("en-IN", {
-    style: "currency",
-    currency: "INR",
-    maximumFractionDigits: 0,
-  }).format(amount);
+  } catch {
+    // Extremely unlikely (normalizeCurrencyCode already guarantees a known code),
+    // but never let email formatting crash a send.
+    return `${code} ${amount.toLocaleString("en-US")}`;
+  }
 }
 
 function formatDate(date: Date): string {

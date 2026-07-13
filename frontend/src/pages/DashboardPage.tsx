@@ -24,7 +24,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { formatCurrency } from "@/lib/currency";
+import { formatCurrencyAmount as formatCurrency } from "@/lib/currencies";
 import { getExchangeRates, sumInUSD } from "@/lib/exchangeRates";
 
 const NAV_ITEMS = [
@@ -100,7 +100,9 @@ export function DashboardPage() {
   const [stats, setStats] = useState({
     totalInvoices: 0,
     pendingUSD: 0,
+    pendingHasUnconverted: false,
     paidUSD: 0,
+    paidHasUnconverted: false,
     overdueCount: 0,
   });
   const [recentInvoices, setRecentInvoices] = useState<RecentInvoice[]>([]);
@@ -115,6 +117,7 @@ export function DashboardPage() {
       icon: FileText,
       color: "text-indigo-600",
       bg: "bg-indigo-50",
+      hasUnconverted: false,
     },
     {
       label: "Pending Payment",
@@ -123,6 +126,7 @@ export function DashboardPage() {
       icon: Clock,
       color: "text-amber-600",
       bg: "bg-amber-50",
+      hasUnconverted: !statsLoading && stats.pendingHasUnconverted,
     },
     {
       label: "Paid This Month",
@@ -135,6 +139,7 @@ export function DashboardPage() {
       icon: CheckCircle2,
       color: "text-emerald-600",
       bg: "bg-emerald-50",
+      hasUnconverted: !statsLoading && stats.paidHasUnconverted,
     },
     {
       label: "Overdue",
@@ -143,6 +148,7 @@ export function DashboardPage() {
       icon: AlertCircle,
       color: "text-red-500",
       bg: "bg-red-50",
+      hasUnconverted: false,
     },
   ];
 
@@ -159,10 +165,14 @@ export function DashboardPage() {
         if (!profile?.isOnboarded) {
           setShowOnboardingBanner(true);
         }
+        const pending = sumInUSD(data.stats.pendingByCurrency, rates);
+        const paid = sumInUSD(data.stats.paidByCurrency, rates);
         setStats({
           totalInvoices: data.stats.totalInvoices,
-          pendingUSD: sumInUSD(data.stats.pendingByCurrency, rates),
-          paidUSD: sumInUSD(data.stats.paidByCurrency, rates),
+          pendingUSD: pending.total,
+          pendingHasUnconverted: pending.hasUnconverted,
+          paidUSD: paid.total,
+          paidHasUnconverted: paid.hasUnconverted,
           overdueCount: data.stats.overdueCount,
         });
         setRecentInvoices(data.recentInvoices);
@@ -386,7 +396,17 @@ export function DashboardPage() {
                     <stat.icon className={`w-4 h-4 ${stat.color}`} />
                   </div>
                 </div>
-                <p className="text-2xl font-bold text-gray-900">{stat.value}</p>
+                <p className="text-2xl font-bold text-gray-900 flex items-center gap-1.5">
+                  {stat.value}
+                  {stat.hasUnconverted && (
+                    <span
+                      title="Some amounts couldn't be converted to USD (missing exchange rate) and were excluded from this total."
+                      className="inline-flex"
+                    >
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
+                    </span>
+                  )}
+                </p>
                 <p className="text-xs text-gray-400 mt-1">{stat.sub}</p>
               </div>
             ))}

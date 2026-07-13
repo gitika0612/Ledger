@@ -1,4 +1,5 @@
 import mongoose, { Document, Schema } from "mongoose";
+import { isValidCurrencyCode, normalizeCurrencyCode } from "../lib/currencies";
 
 export interface ILineItem {
   description: string;
@@ -43,7 +44,7 @@ export interface IInvoiceDocument extends Document {
   invoiceDate: Date;
   invoiceMonth: string;
   dueDate: Date;
-  currency?: "INR" | "USD" | "EUR";
+  currency?: string;
   idempotencyKey: string;
   remindersSent: number[];
   lastReminderAt?: Date;
@@ -120,8 +121,15 @@ const invoiceSchema = new Schema<IInvoiceDocument>(
     },
     currency: {
       type: String,
-      enum: ["INR", "USD", "EUR"],
       default: "INR",
+      // Accept any valid ISO-4217 code we know about (see backend/src/lib/currencies.ts);
+      // unrecognized codes are normalized to USD rather than rejected, so a stale/unknown
+      // code never blocks a save.
+      set: (v: string) => normalizeCurrencyCode(v),
+      validate: {
+        validator: (v: string) => isValidCurrencyCode(v),
+        message: (props: { value: string }) => `${props.value} is not a supported currency code`,
+      },
     },
     idempotencyKey: {
       type: String,

@@ -11,31 +11,57 @@ const REMINDER_DAYS = [1, 3, 7] as const;
 type ReminderDay = (typeof REMINDER_DAYS)[number];
 
 // ── Currency → timezone mapping ──
-// Adding a new currency in future = 1 line here.
-// Cron runs every hour and auto-detects which currencies are at 10 AM.
+// Used to decide "is it 10 AM in this currency's home market right now?"
+// Only the currencies with an obvious single home market are mapped explicitly;
+// any currency not listed here falls back to DEFAULT_TIMEZONE so reminders still
+// fire on a predictable schedule instead of silently never firing.
 const CURRENCY_TIMEZONES: Record<string, string> = {
   INR: "Asia/Kolkata", // UTC+5:30 — India
   USD: "America/New_York", // UTC-5    — USA (EST)
   EUR: "Europe/Paris", // UTC+1    — Central Europe (CET)
+  GBP: "Europe/London",
+  AUD: "Australia/Sydney",
+  CAD: "America/Toronto",
+  SGD: "Asia/Singapore",
+  AED: "Asia/Dubai",
+  JPY: "Asia/Tokyo",
+  CNY: "Asia/Shanghai",
 };
 
+// Fallback for any currency without an explicit home-market timezone above.
+const DEFAULT_TIMEZONE = "Etc/UTC";
+
+function timezoneForCurrency(currency: string): string {
+  return CURRENCY_TIMEZONES[currency] ?? DEFAULT_TIMEZONE;
+}
+
 // ── Which currencies are at 10 AM right now? ──
-// Called every hour by the cron job.
-// Returns e.g. ["INR"] at 4:30 AM UTC, ["EUR"] at 9:00 AM UTC, ["USD"] at 3:00 PM UTC.
-export function getCurrenciesAt10AM(): string[] {
+// Called every hour by the cron job. Looks at the currencies actually in use
+// on outstanding invoices (not a hardcoded list) so any of the 150+ supported
+// currencies gets reminders — unmapped ones just use the UTC fallback timezone.
+export async function getCurrenciesAt10AM(): Promise<string[]> {
   const now = new Date();
-  return Object.entries(CURRENCY_TIMEZONES)
-    .filter(([_, tz]) => {
-      const hour = parseInt(
-        now.toLocaleString("en-US", {
-          timeZone: tz,
-          hour: "numeric",
-          hour12: false,
-        })
-      );
-      return hour === 10;
-    })
-    .map(([currency]) => currency);
+
+  let activeCurrencies: string[] = [];
+  try {
+    activeCurrencies = await Invoice.distinct("currency", {
+      status: { $in: ["sent", "overdue"] },
+    });
+  } catch (err) {
+    console.error("❌ Failed to load active reminder currencies:", err);
+    return [];
+  }
+
+  return activeCurrencies.filter((currency) => {
+    const hour = parseInt(
+      now.toLocaleString("en-US", {
+        timeZone: timezoneForCurrency(currency),
+        hour: "numeric",
+        hour12: false,
+      })
+    );
+    return hour === 10;
+  });
 }
 
 // ── Which reminder number is this? ──
@@ -187,7 +213,7 @@ export async function runScheduledReminders(): Promise<{
   processed: string[];
   results: Record<string, { sent: number; skipped: number; errors: number }>;
 }> {
-  const currencies = getCurrenciesAt10AM();
+  const currencies = await getCurrenciesAt10AM();
   // const currencies = ["INR"]; // TEMP FOR TESTING
 
   if (currencies.length === 0) {

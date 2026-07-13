@@ -24,13 +24,18 @@ import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import { useUser } from "@clerk/clerk-react";
 import { getClientByName } from "@/lib/api/clientApi";
-import { formatCurrency, getCurrencySymbol } from "@/lib/currency";
+import {
+  formatCurrencyAmount as formatCurrency,
+  getCurrencySymbol,
+  isIndianCurrency,
+  getCurrencyInfo,
+} from "@/lib/currencies";
 
 export interface EditInvoiceData {
   _id: string;
   invoiceNumber: string;
   clientName: string;
-  currency?: "INR" | "USD" | "EUR";
+  currency?: string;
   clientEmail?: string;
   clientAddress?: string;
   clientCity?: string;
@@ -195,7 +200,7 @@ function isValidEmail(email: string) {
 // ── Dual-path recompute ──
 function recompute(
   items: LineItem[],
-  currency: "INR" | "USD" | "EUR",
+  currency: string,
   gstPercent: number,
   gstType: "IGST" | "CGST_SGST",
   taxPercent: number,
@@ -212,7 +217,7 @@ function recompute(
       : 0;
   const taxableAmount = subtotal - discountAmount;
 
-  if (currency === "INR") {
+  if (isIndianCurrency(currency)) {
     const gstAmount = Math.round((taxableAmount * gstPercent) / 100);
     const cgstAmount = gstType === "CGST_SGST" ? Math.round(gstAmount / 2) : 0;
     const sgstAmount = gstType === "CGST_SGST" ? gstAmount - cgstAmount : 0;
@@ -232,7 +237,7 @@ function recompute(
     };
   } else {
     const taxAmount = Math.round((taxableAmount * taxPercent) / 100);
-    const resolvedLabel = taxLabel || (currency === "EUR" ? "VAT" : "Tax");
+    const resolvedLabel = taxLabel || getCurrencyInfo(currency).taxLabel;
     return {
       subtotal,
       discountAmount,
@@ -301,7 +306,7 @@ export function EditInvoiceModal({
   const { user } = useUser();
 
   const currency = invoice.currency ?? "INR";
-  const isINR = currency === "INR";
+  const isINR = isIndianCurrency(currency);
   const symbol = getCurrencySymbol(currency);
   const fmt = (amount: number) => formatCurrency(amount, currency);
 
@@ -325,7 +330,7 @@ export function EditInvoiceModal({
     taxPercent: !isINR ? invoice.taxPercent || 0 : 0,
     taxAmount: !isINR ? invoice.taxAmount || 0 : 0,
     taxLabel: !isINR
-      ? invoice.taxLabel || (currency === "EUR" ? "VAT" : "Tax")
+      ? invoice.taxLabel || getCurrencyInfo(currency).taxLabel
       : "",
     // Common
     discountType: (invoice.discountType || "none") as
@@ -1017,7 +1022,7 @@ export function EditInvoiceModal({
                 {!isINR && (
                   <div className="col-span-2">
                     <FieldWrapper
-                      label={currency === "EUR" ? "VAT %" : "Tax %"}
+                      label={`${getCurrencyInfo(currency).taxLabel} %`}
                     >
                       <Input
                         type="number"
@@ -1035,7 +1040,7 @@ export function EditInvoiceModal({
                           )
                         }
                         placeholder={`Enter ${
-                          currency === "EUR" ? "VAT" : "Tax"
+                          getCurrencyInfo(currency).taxLabel
                         } %`}
                         className="rounded-xl text-sm focus-visible:ring-indigo-400"
                       />
@@ -1196,7 +1201,7 @@ export function EditInvoiceModal({
               {!isINR && form.taxAmount > 0 && (
                 <div className="flex justify-between text-xs">
                   <span className="text-gray-500">
-                    {form.taxLabel || (currency === "EUR" ? "VAT" : "Tax")}
+                    {form.taxLabel || getCurrencyInfo(currency).taxLabel}
                     {form.taxPercent > 0 ? ` (${form.taxPercent}%)` : ""}
                   </span>
                   <span className="font-medium text-gray-700">

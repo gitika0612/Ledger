@@ -1,21 +1,13 @@
 import Stripe from "stripe";
 import { Request, Response } from "express";
 import { Invoice } from "../models/Invoice";
+import {
+  toStripeCurrency,
+  toStripeUnitAmount,
+  isOnlinePaymentSupported,
+} from "../lib/stripeCurrency";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
-
-// Maps invoice currency to Stripe currency code
-function toStripeCurrency(currency?: string): string {
-  switch (currency?.toUpperCase()) {
-    case "USD":
-      return "usd";
-    case "EUR":
-      return "eur";
-    case "INR":
-    default:
-      return "inr";
-  }
-}
 
 export async function createCheckoutSession(req: Request, res: Response) {
   const { invoiceId } = req.body;
@@ -33,6 +25,14 @@ export async function createCheckoutSession(req: Request, res: Response) {
         .json({ error: "Invoice not available for payment" });
     }
 
+    if (!isOnlinePaymentSupported(invoice.currency)) {
+      return res.status(400).json({
+        error: `Online payment isn't available for invoices in ${
+          invoice.currency ?? "this currency"
+        } yet.`,
+      });
+    }
+
     const stripeCurrency = toStripeCurrency(invoice.currency);
 
     const session = await stripe.checkout.sessions.create({
@@ -47,7 +47,7 @@ export async function createCheckoutSession(req: Request, res: Response) {
               name: `Invoice ${invoice.invoiceNumber}`,
               description: `${invoice.invoiceMonth ?? ""}`,
             },
-            unit_amount: invoice.total * 100,
+            unit_amount: toStripeUnitAmount(invoice.total, invoice.currency),
           },
           quantity: 1,
         },
@@ -62,6 +62,30 @@ export async function createCheckoutSession(req: Request, res: Response) {
 
     res.json({ url: session.url, sessionId: session.id });
   } catch (err) {
+    // Backstop for defense-in-depth: covers any currency that slips past the
+    // isOnlinePaymentSupported() gate above (e.g. ACCOUNT_SUPPORTED_CURRENCIES
+    // drifting out of sync with what Stripe actually accepts). Stripe rejects
+    // an unsettleable currency with a StripeInvalidRequestError whose `param`
+    // points at the checkout line item's currency field — detect that
+    // specifically so we don't tell the customer to "try again" on something
+    // that will never succeed.
+    const isInvalidCurrencyError =
+      err instanceof Stripe.errors.StripeInvalidRequestError &&
+      ((typeof err.param === "string" &&
+        err.param.toLowerCase().includes("currency")) ||
+        /invalid currency/i.test(err.message ?? ""));
+
+    if (isInvalidCurrencyError) {
+      console.warn(
+        `Stripe rejected currency for invoice ${invoiceId} — account not configured to settle it:`,
+        err.message
+      );
+      return res.status(400).json({
+        error:
+          "This currency isn't available for online payment. Please contact the sender.",
+      });
+    }
+
     console.error("Stripe checkout error:", err);
     res.status(500).json({ error: "Failed to create payment session" });
   }
@@ -86,7 +110,12 @@ export async function getPublicInvoice(req: Request, res: Response) {
         .json({ error: "Invoice not available for payment" });
     }
 
-    res.json({ invoice });
+    res.json({
+      invoice: {
+        ...invoice,
+        onlinePaymentAvailable: isOnlinePaymentSupported(invoice.currency),
+      },
+    });
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch invoice" });
   }

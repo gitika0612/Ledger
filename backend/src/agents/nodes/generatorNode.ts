@@ -5,6 +5,25 @@ import { GENERATOR_PROMPT } from "../prompts/invoicePrompt";
 import { findClientMatch } from "../../lib/clientMatcher";
 import { recalculateTotals, formatCurrency } from "../utils/invoiceUtils";
 import { Invoice } from "../../models/Invoice";
+import { isIndianCurrency, getCurrencyInfo } from "../../lib/currencies";
+
+const CURRENCY_SYMBOL_MAP: Record<string, string> = {
+  "$": "USD",
+  "€": "EUR",
+  "£": "GBP",
+  "₹": "INR",
+  "¥": "JPY",
+  "₩": "KRW",
+  "₦": "NGN",
+  "₽": "RUB",
+  "₺": "TRY",
+  "₴": "UAH",
+  "₫": "VND",
+  "₱": "PHP",
+};
+const CURRENCY_SYMBOLS_PATTERN = Object.keys(CURRENCY_SYMBOL_MAP)
+  .map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+  .join("");
 
 function extractClientNameFromPrompt(prompt: string): string | null {
   const commonWords = new Set([
@@ -86,12 +105,11 @@ async function fetchClientMemoryContext(
 
     const latest = invoices[0];
     const latestCurrency = latest.currency ?? "INR";
-    const taxInfo =
-      latestCurrency === "INR"
-        ? `GST ${latest.gstPercent ?? 18}% CGST_SGST`
-        : `${latest.taxLabel || (latestCurrency === "EUR" ? "VAT" : "Tax")} ${
-            latest.taxPercent ?? 0
-          }%`;
+    const taxInfo = isIndianCurrency(latestCurrency)
+      ? `GST ${latest.gstPercent ?? 18}% CGST_SGST`
+      : `${latest.taxLabel || getCurrencyInfo(latestCurrency).taxLabel} ${
+          latest.taxPercent ?? 0
+        }%`;
     return `Client ${clientName} defaults — use ONLY for fields not specified in current prompt: currency=${latestCurrency}, ${taxInfo}, paymentTerms=${
       latest.paymentTermsDays ?? 15
     }days. NEVER copy line item amounts from history.`;
@@ -128,7 +146,10 @@ function parseSessionBlocks(sessionContext: string) {
 function parseBlockToInvoice(block: string): ParsedInvoice | null {
   const lineItemsMatch = [
     ...block.matchAll(
-      /-\s*(.+?)\s*\|\s*Qty:\s*([\d.]+)\s*(.+?)\s*\|\s*Rate:\s*[₹$€]?([\d,]+)\s*\|\s*Amount:\s*[₹$€]?([\d,]+)/g
+      new RegExp(
+        `-\\s*(.+?)\\s*\\|\\s*Qty:\\s*([\\d.]+)\\s*(.+?)\\s*\\|\\s*Rate:\\s*[${CURRENCY_SYMBOLS_PATTERN}]?([\\d,]+)\\s*\\|\\s*Amount:\\s*[${CURRENCY_SYMBOLS_PATTERN}]?([\\d,]+)`,
+        "g"
+      )
     ),
   ];
   const lineItems = lineItemsMatch.map((m) => ({
@@ -141,8 +162,12 @@ function parseBlockToInvoice(block: string): ParsedInvoice | null {
     hsnSacType: "SAC" as const,
   }));
   const gstMatch = block.match(/GST:\s*([\d.]+)%\s*(\w+)/i);
-  const totalMatch = block.match(/Total:\s*[₹$€]?([\d,]+)/i);
-  const subtotalMatch = block.match(/Subtotal:\s*[₹$€]?([\d,]+)/i);
+  const totalMatch = block.match(
+    new RegExp(`Total:\\s*[${CURRENCY_SYMBOLS_PATTERN}]?([\\d,]+)`, "i")
+  );
+  const subtotalMatch = block.match(
+    new RegExp(`Subtotal:\\s*[${CURRENCY_SYMBOLS_PATTERN}]?([\\d,]+)`, "i")
+  );
   const termsMatch = block.match(/Payment Terms:\s*(\d+)/i);
   const clientMatch = block.match(/Client:\s*(.+)/i);
   const monthMatch = block.match(/Invoice Month:\s*(.+)/i);
@@ -280,7 +305,11 @@ function fillTemplate(template: string, vars: Record<string, string>): string {
 // Returns null if prompt has multiple line items or per-unit pricing (let LLM handle those)
 function extractStatedBaseAmount(prompt: string): number | null {
   // Skip if prompt has multiple amounts (multi-line-item invoice)
-  const allAmounts = [...prompt.matchAll(/[₹$€]([0-9,]+(?:\.[0-9]+)?)/g)];
+  const allAmounts = [
+    ...prompt.matchAll(
+      new RegExp(`[${CURRENCY_SYMBOLS_PATTERN}]([0-9,]+(?:\\.[0-9]+)?)`, "g")
+    ),
+  ];
   if (allAmounts.length > 1) return null; // let LLM handle multi-item
 
   // Skip per-unit pricing like "₹10,000/day" — LLM calculates total correctly
@@ -295,9 +324,30 @@ function extractStatedBaseAmount(prompt: string): number | null {
   // k suffix
   const m3 = prompt.match(/[₹]?([0-9]+(?:\.[0-9]+)?)\s*k/i);
   if (m3) return parseFloat(m3[1]) * 1000;
-  // $ or €
-  const m4 = prompt.match(/[$€]([0-9,]+(?:\.[0-9]+)?)/);
+  // Any other currency symbol
+  const m4 = prompt.match(
+    new RegExp(`[${CURRENCY_SYMBOLS_PATTERN.replace("₹", "")}]([0-9,]+(?:\\.[0-9]+)?)`)
+  );
   if (m4) return parseFloat(m4[1].replace(/,/g, ""));
+
+  // Number + spelled-out currency word — e.g. "50000 rupees", "50000 rs",
+  // "50000 inr", "3500 dollars", "3500 usd", "3500 euros", "3500 pounds"
+  const m5 = prompt.match(
+    /([0-9][0-9,]*(?:\.[0-9]+)?)\s*(?:rupees?|rs\.?|inr|dollars?|usd|euros?|eur|pounds?|gbp)\b/i
+  );
+  if (m5) return parseFloat(m5[1].replace(/,/g, ""));
+
+  // Bare number, no currency symbol/suffix/word at all — e.g. "50000 with 18% GST".
+  // Only trust this if it's the SINGLE unambiguous non-percentage number in the
+  // prompt (the tax rate itself is excluded since it's followed by "%"). If there
+  // are multiple plain numbers (e.g. a payment-terms number alongside the amount),
+  // bail to null rather than guess which one is the base.
+  const plainNumbers = [
+    ...prompt.matchAll(/\b([0-9][0-9,]*(?:\.[0-9]+)?)\b(?!\s*%)/g),
+  ].map((match) => match[1]);
+  if (plainNumbers.length === 1) {
+    return parseFloat(plainNumbers[0].replace(/,/g, ""));
+  }
   return null;
 }
 
@@ -359,7 +409,7 @@ function applyTaxCorrection(raw: ParsedInvoice, prompt: string): ParsedInvoice {
       isTaxInclusive: false,
       taxPercent: 0,
       taxAmount: 0,
-      taxLabel: currency === "EUR" ? "VAT" : currency === "USD" ? "Tax" : "",
+      taxLabel: isIndianCurrency(currency) ? "" : getCurrencyInfo(currency).taxLabel,
       gstPercent: 0,
       gstAmount: 0,
       cgstAmount: 0,
@@ -371,14 +421,15 @@ function applyTaxCorrection(raw: ParsedInvoice, prompt: string): ParsedInvoice {
 
   // ── Case 2: "plus tax" / "ex. tax" — unknown rate ──
   if (isPlusTax && !isInclusive) {
-    const taxLabel =
-      currency === "EUR" ? "VAT" : currency === "USD" ? "Tax" : "GST";
+    const taxLabel = isIndianCurrency(currency)
+      ? "GST"
+      : getCurrencyInfo(currency).taxLabel;
     return {
       ...raw,
       isTaxInclusive: false,
       taxPercent: 0,
       taxAmount: 0,
-      taxLabel: currency !== "INR" ? taxLabel : "",
+      taxLabel: !isIndianCurrency(currency) ? taxLabel : "",
       gstPercent: 0,
       gstAmount: 0,
       cgstAmount: 0,
@@ -410,7 +461,7 @@ function applyTaxCorrection(raw: ParsedInvoice, prompt: string): ParsedInvoice {
     ).map((item, i) =>
       i === 0 ? { ...item, amount: preTax, rate: preTax } : item
     );
-    if (currency === "INR") {
+    if (isIndianCurrency(currency)) {
       const gstType = raw.gstType || "CGST_SGST";
       return {
         ...raw,
@@ -436,7 +487,7 @@ function applyTaxCorrection(raw: ParsedInvoice, prompt: string): ParsedInvoice {
         isTaxInclusive: true,
         taxPercent: promptRate,
         taxAmount: taxAmt,
-        taxLabel: raw.taxLabel || (currency === "EUR" ? "VAT" : "Tax"),
+        taxLabel: raw.taxLabel || getCurrencyInfo(currency).taxLabel,
         gstPercent: 0,
         gstAmount: 0,
         cgstAmount: 0,
@@ -453,8 +504,9 @@ function applyTaxCorrection(raw: ParsedInvoice, prompt: string): ParsedInvoice {
 
   // ── Case 4: Inclusive WITHOUT rate — warn ──
   if (isInclusive && !hasRate) {
-    const warningLabel =
-      currency === "EUR" ? "VAT" : currency === "USD" ? "Tax" : "GST";
+    const warningLabel = isIndianCurrency(currency)
+      ? "GST"
+      : getCurrencyInfo(currency).taxLabel;
     const items = (raw.lineItems?.length > 0 ? raw.lineItems : []).map(
       (item, i) =>
         i === 0 ? { ...item, amount: statedTotal, rate: statedTotal } : item
@@ -464,7 +516,7 @@ function applyTaxCorrection(raw: ParsedInvoice, prompt: string): ParsedInvoice {
       isTaxInclusive: true,
       taxPercent: 0,
       taxAmount: 0,
-      taxLabel: currency !== "INR" ? warningLabel : "",
+      taxLabel: !isIndianCurrency(currency) ? warningLabel : "",
       gstPercent: 0,
       gstAmount: 0,
       cgstAmount: 0,
@@ -521,7 +573,7 @@ function applyTaxCorrection(raw: ParsedInvoice, prompt: string): ParsedInvoice {
         console.log("✅ Case5 lineItem corrected:", llmAmount, "→", statedBase);
       }
     }
-    if (currency === "INR") {
+    if (isIndianCurrency(currency)) {
       return {
         ...raw,
         isTaxInclusive: false,
@@ -538,7 +590,7 @@ function applyTaxCorrection(raw: ParsedInvoice, prompt: string): ParsedInvoice {
         ...raw,
         isTaxInclusive: false,
         taxPercent: promptRate,
-        taxLabel: raw.taxLabel || (currency === "EUR" ? "VAT" : "Tax"),
+        taxLabel: raw.taxLabel || getCurrencyInfo(currency).taxLabel,
         gstPercent: 0,
         gstAmount: 0,
         cgstAmount: 0,
@@ -551,8 +603,8 @@ function applyTaxCorrection(raw: ParsedInvoice, prompt: string): ParsedInvoice {
     }
   }
 
-  // ── Case 6: No tax mention — INR gets default 18% GST, USD/EUR get 0 ──
-  if (currency === "INR") {
+  // ── Case 6: No tax mention — INR gets default 18% GST, everything else gets 0 ──
+  if (isIndianCurrency(currency)) {
     // Enforce the documented default. By this point in the function,
     // isNoTax/isPlusTax/hasRate are all false — meaning the prompt contains
     // NO explicit tax signal whatsoever. The LLM can sometimes misread

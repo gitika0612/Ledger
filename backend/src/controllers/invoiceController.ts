@@ -5,6 +5,7 @@ import { Invoice } from "../models/Invoice";
 import { generateInvoiceNumber } from "../lib/invoiceHelper";
 import { runInvoiceAgent } from "../agents/invoiceAgent";
 import { runScheduledReminders } from "../lib/reminderService";
+import { getCurrencyInfo, isIndianCurrency, normalizeCurrencyCode } from "../lib/currencies";
 
 // ── Parse invoice (main AI endpoint) ──
 export async function parseInvoice(req: Request, res: Response): Promise<void> {
@@ -147,8 +148,8 @@ export async function saveDraftInvoice(
       $or: [{ status: "confirmed" }, { isConfirmed: true }],
     });
 
-    const resolvedCurrency = currency || "INR";
-    const isINR = resolvedCurrency === "INR";
+    const resolvedCurrency = normalizeCurrencyCode(currency || "INR");
+    const isINR = isIndianCurrency(resolvedCurrency);
 
     const invoice = await Invoice.create({
       userId,
@@ -184,7 +185,7 @@ export async function saveDraftInvoice(
       taxPercent: !isINR ? taxPercent || 0 : 0,
       taxAmount: !isINR ? taxAmount || 0 : 0,
       taxLabel: !isINR
-        ? taxLabel || (resolvedCurrency === "EUR" ? "VAT" : "Tax")
+        ? taxLabel || getCurrencyInfo(resolvedCurrency).taxLabel
         : "",
       // Common
       discountType: discountType || "none",

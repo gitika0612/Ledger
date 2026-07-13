@@ -1,4 +1,5 @@
 import { ParsedInvoice } from "@/components/invoice/InvoicePreviewCard";
+import { isIndianCurrency, getCurrencyInfo } from "@/lib/currencies";
 
 export function recalculateTotals(invoice: ParsedInvoice): ParsedInvoice {
   const currency = invoice.currency ?? "INR";
@@ -13,7 +14,7 @@ export function recalculateTotals(invoice: ParsedInvoice): ParsedInvoice {
       0
     );
 
-    if (currency === "INR") {
+    if (isIndianCurrency(currency)) {
       const gstPercent = invoice.gstPercent ?? 0;
       const gstAmount = gstPercent > 0 ? statedTotal - subtotal : 0;
       const gstType = invoice.gstType || "CGST_SGST";
@@ -39,7 +40,7 @@ export function recalculateTotals(invoice: ParsedInvoice): ParsedInvoice {
     } else {
       const taxPercent = invoice.taxPercent ?? 0;
       const taxAmount = taxPercent > 0 ? statedTotal - subtotal : 0;
-      const taxLabel = invoice.taxLabel || (currency === "EUR" ? "VAT" : "Tax");
+      const taxLabel = invoice.taxLabel || getCurrencyInfo(currency).taxLabel;
 
       return {
         ...invoice,
@@ -77,7 +78,7 @@ export function recalculateTotals(invoice: ParsedInvoice): ParsedInvoice {
 
   const taxableAmount = subtotal - discountAmount;
 
-  if (currency === "INR") {
+  if (isIndianCurrency(currency)) {
     const gstAmount = Math.round(
       (taxableAmount * (invoice.gstPercent ?? 0)) / 100
     );
@@ -107,7 +108,7 @@ export function recalculateTotals(invoice: ParsedInvoice): ParsedInvoice {
   } else {
     const taxPercent = invoice.taxPercent ?? 0;
     const taxAmount = Math.round((taxableAmount * taxPercent) / 100);
-    const taxLabel = invoice.taxLabel || (currency === "EUR" ? "VAT" : "Tax");
+    const taxLabel = invoice.taxLabel || getCurrencyInfo(currency).taxLabel;
 
     return {
       ...invoice,

@@ -1,19 +1,19 @@
 import { FileText, ChevronRight, CheckCircle2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { formatCurrency } from "@/lib/currency";
+import { formatCurrencyAmount } from "@/lib/currencies";
 
 interface InvoiceMiniCardProps {
   clientName: string;
   total: number;
-  currency?: "INR" | "USD" | "EUR";
+  currency?: string;
   status: "draft" | "confirmed" | "sent" | "paid" | "overdue";
   invoiceNumber?: string;
   onClick: () => void;
 }
 
-function formatINR(amount: number, currency?: "INR" | "USD" | "EUR") {
-  return formatCurrency(amount, currency ?? "INR");
+function formatINR(amount: number, currency?: string) {
+  return formatCurrencyAmount(amount, currency ?? "INR");
 }
 
 export function InvoiceMiniCard({

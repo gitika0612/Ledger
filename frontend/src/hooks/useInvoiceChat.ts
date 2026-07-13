@@ -31,7 +31,11 @@ import {
   findMatchingInvoices,
   SESSION_LIMIT,
 } from "@/lib/invoice-chat/sessionHelpers";
-import { formatCurrency } from "@/lib/currency";
+import {
+  formatCurrencyAmount as formatCurrency,
+  isIndianCurrency,
+  getCurrencyInfo,
+} from "@/lib/currencies";
 
 export interface UIMessage {
   _id: string;
@@ -119,32 +123,29 @@ function isInvoiceOverride(reply: string): boolean {
 // Human-readable summary when deterministic override is applied
 function applyOverrideSummary(reply: string, invoice: ParsedInvoice): string {
   const currency = invoice.currency ?? "INR";
+  const isINR = isIndianCurrency(currency);
   const r = reply.toLowerCase();
   if (/vat|tax|gst/.test(r)) {
-    const rate =
-      currency === "INR" ? invoice.gstPercent : invoice.taxPercent ?? 0;
-    const label =
-      currency === "INR" ? "GST" : currency === "EUR" ? "VAT" : "Tax";
-    const sym = currency === "USD" ? "$" : currency === "EUR" ? "€" : "₹";
+    const rate = isINR ? invoice.gstPercent : invoice.taxPercent ?? 0;
+    const label = isINR ? "GST" : getCurrencyInfo(currency).taxLabel;
     if (invoice.isTaxInclusive) {
-      return `Got it! ${label} ${rate}% back-calculated from total — subtotal: ${sym}${invoice.subtotal.toLocaleString(
-        "en-IN"
-      )}, ${label}: ${sym}${(
-        invoice.taxAmount ??
-        invoice.gstAmount ??
-        0
-      ).toLocaleString(
-        "en-IN"
-      )}, total stays ${sym}${invoice.total.toLocaleString("en-IN")}`;
+      return `Got it! ${label} ${rate}% back-calculated from total — subtotal: ${formatCurrency(
+        invoice.subtotal,
+        currency
+      )}, ${label}: ${formatCurrency(
+        invoice.taxAmount ?? invoice.gstAmount ?? 0,
+        currency
+      )}, total stays ${formatCurrency(invoice.total, currency)}`;
     }
-    return `Updated! ${label} ${rate}% applied → new total: ${sym}${invoice.total.toLocaleString(
-      "en-IN"
+    return `Updated! ${label} ${rate}% applied → new total: ${formatCurrency(
+      invoice.total,
+      currency
     )}`;
   }
   if (/discount|off/.test(r)) {
-    const sym = currency === "USD" ? "$" : currency === "EUR" ? "€" : "₹";
-    return `Discount applied → new total: ${sym}${invoice.total.toLocaleString(
-      "en-IN"
+    return `Discount applied → new total: ${formatCurrency(
+      invoice.total,
+      currency
     )}`;
   }
   if (/net|days|terms/.test(r)) {
@@ -992,12 +993,13 @@ export function useInvoiceChat() {
           if (!isNaN(rate)) {
             const currency = patched.currency ?? "INR";
             const inv = current.invoice!;
-            const existingRate =
-              currency === "INR" ? inv.gstPercent ?? 0 : inv.taxPercent ?? 0;
+            const existingRate = isIndianCurrency(currency)
+              ? inv.gstPercent ?? 0
+              : inv.taxPercent ?? 0;
             const wasInclusive =
               inv.isTaxInclusive === true && existingRate === 0;
 
-            if (currency === "INR") {
+            if (isIndianCurrency(currency)) {
               if (wasInclusive) {
                 const statedTotal = current.invoice!.total;
                 const preTax = Math.round((statedTotal * 100) / (100 + rate));
@@ -1029,7 +1031,7 @@ export function useInvoiceChat() {
                 patched = {
                   ...patched,
                   taxPercent: rate,
-                  taxLabel: currency === "EUR" ? "VAT" : "Tax",
+                  taxLabel: getCurrencyInfo(currency).taxLabel,
                   isTaxInclusive: true,
                   lineItems: [
                     { ...patched.lineItems[0], amount: preTax, rate: preTax },
@@ -1063,7 +1065,7 @@ export function useInvoiceChat() {
                 patched = {
                   ...patched,
                   taxPercent: rate,
-                  taxLabel: currency === "EUR" ? "VAT" : "Tax",
+                  taxLabel: getCurrencyInfo(currency).taxLabel,
                 };
               }
             }
